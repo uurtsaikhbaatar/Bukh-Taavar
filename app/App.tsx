@@ -13,10 +13,11 @@ import { HomeScreen } from './src/screens/HomeScreen';
 import { MarketScreen } from './src/screens/MarketScreen';
 import { LeaderboardScreen, PortfolioScreen } from './src/screens/PortfolioScreen';
 import { TotoScreen } from './src/screens/TotoScreen';
+import { WrestlersScreen } from './src/screens/WrestlersScreen';
 import type { MeDto } from './src/shared/api';
 import { theme } from './src/theme';
 
-type Tab = 'home' | 'toto' | 'portfolio' | 'leaderboard' | 'admin';
+type Tab = 'home' | 'toto' | 'wrestlers' | 'portfolio' | 'leaderboard' | 'admin';
 
 export default function App() {
   const [me, setMe] = useState<MeDto | null>(null);
@@ -124,6 +125,8 @@ export default function App() {
     <HomeScreen refreshKey={refreshKey} onOpenMarket={openMarket} onOpenBoard={(id) => setBoardId(id)} />
   ) : tab === 'toto' ? (
     <TotoScreen me={me} refreshKey={refreshKey} onTraded={(balance) => setMe((m) => (m ? { ...m, balance } : m))} />
+  ) : tab === 'wrestlers' ? (
+    <WrestlersScreen refreshKey={refreshKey} />
   ) : tab === 'portfolio' ? (
     <PortfolioScreen me={me} refreshKey={refreshKey} onOpenMarket={openMarket} onMe={setMe} onLogout={() => setMe(null)} />
   ) : tab === 'leaderboard' ? (
@@ -134,7 +137,8 @@ export default function App() {
 
   const tabs: [Tab, string][] = [
     ['home', '🏟 Зах зээл'],
-    ['toto', '🎟 Тото'],
+    ['toto', '🎟 Багц таавар'],
+    ['wrestlers', '🤼 Бөхчүүд'],
     ['portfolio', '👤 Би'],
     ['leaderboard', '🏆 Самбар'],
   ];

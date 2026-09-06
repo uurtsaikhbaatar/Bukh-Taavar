@@ -28,14 +28,14 @@ export function TotoScreen({ me, refreshKey, onTraded }: { me: MeDto; refreshKey
   return (
     <ScrollView contentContainerStyle={s.wrap}>
       <Card>
-        <H2>Тото (пул)</H2>
+        <H2>Багц таавар (пул)</H2>
         <P muted small>
           N барилдааны давагчийг таана. Оролцооны хураамж бүгд нэг пулд цугларч, хамгийн олон зөв таасан нар шатлан хуваана (60% / 30% / 10%). Хэн ч таагаагүй бол бүгдэд буцаана.
         </P>
       </Card>
       {totos.length === 0 ? (
         <Card>
-          <P muted>Одоогоор тото алга. Админ тэмцээний барилдаануудаас үүсгэнэ.</P>
+          <P muted>Одоогоор багц таавар алга. Админ тэмцээний барилдаануудаас үүсгэнэ.</P>
         </Card>
       ) : null}
       {totos.map((t) => (
@@ -96,7 +96,7 @@ function TotoDetail({ toto, me, onBack, onTraded, refreshKey }: { toto: TotoDto;
   return (
     <ScrollView contentContainerStyle={s.wrap}>
       <Text style={s.back} onPress={onBack}>
-        ← Тотонууд
+        ← Багц таавар
       </Text>
       <Card style={{ gap: 6 }}>
         <H2>{data.title}</H2>
@@ -117,7 +117,7 @@ function TotoDetail({ toto, me, onBack, onTraded, refreshKey }: { toto: TotoDto;
           return (
             <View key={b.boutId} style={s.bout}>
               <P muted small>
-                {b.round}-р даваа · загвар {fmtPct(b.priorA)} / {fmtPct(1 - b.priorA)}
+                {b.round}-р даваа{b.priorA !== undefined ? ` · загвар ${fmtPct(b.priorA)} / ${fmtPct(1 - b.priorA)}` : ''}
                 {b.winnerId ? ` · ${b.winnerId === b.a.id ? b.a.name : b.b.name} давсан` : ''}
               </P>
               <Row>
@@ -151,7 +151,7 @@ function TotoDetail({ toto, me, onBack, onTraded, refreshKey }: { toto: TotoDto;
         ) : data.myPicks ? (
           <P muted small>Та оролцсон. {data.status !== 'open' ? 'Үр дүн доор.' : 'Барилдаанууд дуусахыг хүлээж байна.'}</P>
         ) : (
-          <P muted small>Энэ тото хаагдсан.</P>
+          <P muted small>Энэ багц таавар хаагдсан.</P>
         )}
       </Card>
 

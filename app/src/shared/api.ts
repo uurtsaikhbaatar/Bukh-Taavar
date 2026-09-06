@@ -52,8 +52,8 @@ export interface BoutDto {
   round: number;
   a: WrestlerDto;
   b: WrestlerDto;
-  /** Загварын магадлал (Elo) — А тал. */
-  priorA: number;
+  /** Загварын магадлал (Elo) — зөвхөн админд явна. */
+  priorA?: number;
   winnerId?: string;
   scheduledAt?: string;
 }
@@ -67,8 +67,8 @@ export interface MarketDto {
   outcomeRefs: (string | null)[];
   /** Зах зээлийн одоогийн магадлал. */
   probs: number[];
-  /** Загварын (анхны) магадлал. */
-  modelProbs: number[];
+  /** Загварын (анхны) магадлал — зөвхөн админд явна. */
+  modelProbs?: number[];
   b: number;
   volume: number;
   tradeCount: number;
@@ -230,7 +230,8 @@ export interface TotoBoutDto {
   round: number;
   a: { id: string; name: string; titleLabel: string; place?: string; rating: number };
   b: { id: string; name: string; titleLabel: string; place?: string; rating: number };
-  priorA: number;
+  /** Загварын магадлал — зөвхөн админд явна. */
+  priorA?: number;
   winnerId?: string;
 }
 
@@ -343,10 +344,10 @@ export interface BoardBoutDto {
   status: MarketStatus | 'none';
   a: BoardSideDto;
   b: BoardSideDto;
-  /** Зах зээлийн магадлал [А, Б]. */
-  probs: [number, number];
-  /** Загварын (Elo) магадлал [А, Б]. */
-  model: [number, number];
+  /** Зах зээлийн магадлал [А, Б]; хоосон [] = бооцоо ороогүй тул нуугдсан. */
+  probs: number[];
+  /** Загварын (Elo) магадлал — зөвхөн админд явна. */
+  model?: [number, number];
   volume: number;
   winnerId?: string;
   /** Миний эзэмшил [А хувь, Б хувь] ба цэвэр зарцуулалт. */
@@ -427,16 +428,41 @@ export interface H2hDto {
   a: { id: string; name: string; title: string; wins: number; losses: number };
   b: { id: string; name: string; title: string; wins: number; losses: number };
   direct: { aWins: number; bWins: number; bouts: { date: string; round: number; winnerId: string; tournament: string }[] };
+  /** Магадлалын талбарууд (pA, perHop, prob) зөвхөн админд — энгийн хэрэглэгчид түүх/замууд л очно. */
   chain: {
-    pA: number;
+    pA?: number;
     connected: boolean;
     maxHops: number;
-    perHop: { k: number; ab: number; ba: number }[];
-    pathsAB: { names: string[]; dates: string[]; prob: number }[];
-    pathsBA: { names: string[]; dates: string[]; prob: number }[];
+    perHop?: { k: number; ab: number; ba: number }[];
+    pathsAB: { names: string[]; dates: string[]; prob?: number }[];
+    pathsBA: { names: string[]; dates: string[]; prob?: number }[];
   };
   bt: { pA: number; eloA: number; eloB: number } | null;
-  elo: { pA: number; ratingA: number; ratingB: number } | null;
+  elo: { pA?: number; ratingA: number; ratingB: number } | null;
+}
+
+/** Бөхийн дэлгэрэнгүй + архивын дүн. */
+export interface WrestlerDetailDto {
+  wrestler: WrestlerDto;
+  /** Архивын нийт давалт–алдагдал (байвал). */
+  record?: { wins: number; losses: number };
+}
+
+export interface WrestlerBoutRowDto {
+  date: string;
+  tournamentName: string;
+  round: number;
+  opponentId: string;
+  opponentName: string;
+  opponentTitleLabel: string;
+  won: boolean;
+  noShow?: boolean;
+}
+
+export interface WrestlerBoutsDto {
+  total: number;
+  offset: number;
+  rows: WrestlerBoutRowDto[];
 }
 
 export type SseMessage =

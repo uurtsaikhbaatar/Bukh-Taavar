@@ -3,7 +3,7 @@
  *
  * Хос бүрийн А/Б бөх дээр дарж сонгоно → мөрөнд дүн (100/500/1 000/5 000/өөрөө) →
  * доод «Тавих» нэг товчоор бүгдийг тавина (тус бүр дан бооцоо, LMSR зах зээл дээр).
- * Хувь = зах зээлийн магадлал, ×коэфф. = 1/магадлал (спот), «загвар» = Elo магадлал.
+ * Хувь = зах зээлийн (бооцооны) магадлал; бооцоо ороогүй бол «—». Загварын магадлал энгийн хэрэглэгчид харагдахгүй.
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
@@ -41,8 +41,7 @@ function Side({
   onPress: () => void;
 }) {
   const w = which === 0 ? bout.a : bout.b;
-  const p = bout.probs[which];
-  const model = bout.model[which];
+  const p = bout.probs[which]; // undefined = бооцоо ороогүй → «—»
   const selected = pick?.outcome === which;
   const resolved = bout.status === 'resolved' || bout.status === 'voided';
   const won = bout.winnerId === w.id;
@@ -70,9 +69,8 @@ function Side({
         {[w.titleLabel, w.place].filter(Boolean).join(' · ')}
       </Text>
       <Row style={{ justifyContent: which === 0 ? 'flex-start' : 'flex-end' }} gap={6}>
-        <Text style={[s.pct, selected && { color: theme.accentText }, won && { color: '#052e16' }]}>{fmtPct(p)}</Text>
-        <Text style={[s.odds, selected && { color: theme.accentText }, won && { color: '#052e16' }]}>{odds(p)}</Text>
-        <Text style={[s.model, selected && { color: theme.accentText }, won && { color: '#052e16' }]}>загвар {fmtPct(model)}</Text>
+        <Text style={[s.pct, selected && { color: theme.accentText }, won && { color: '#052e16' }]}>{p === undefined ? '—' : fmtPct(p)}</Text>
+        {p !== undefined ? <Text style={[s.odds, selected && { color: theme.accentText }, won && { color: '#052e16' }]}>{odds(p)}</Text> : null}
       </Row>
       {won ? <Text style={s.wonTag}>✓ давсан</Text> : null}
       {mine > 0.5 ? (
@@ -102,7 +100,7 @@ function PairRow({
 }) {
   const [custom, setCustom] = useState('');
   const [quote, setQuote] = useState<QuoteDto | null>(null);
-  const p = pick ? bout.probs[pick.outcome] : 0;
+  const p = (pick ? bout.probs[pick.outcome] : undefined) ?? 0;
   const est = pick && p > 0 ? Math.round(pick.stake / p) : 0;
   // Бодит санал (LMSR гулсалттай): сонголт/дүн өөрчлөгдөхөд серверээс авна
   useEffect(() => {
@@ -368,7 +366,7 @@ export function BoardScreen({
                 })}
               </Row>
               <P muted small>
-                {shownRound}-р даваа: {data.bouts.length} барилдаан. Бөх дээр дараад дүнгээ сонго → доор «Тавих». Хувь = зах зээлийн магадлал, × = коэффициент, «загвар» = Elo.
+                {shownRound}-р даваа: {data.bouts.length} барилдаан. Бөх дээр дараад дүнгээ сонго → доор «Тавих». Хувь = бооцооноос үүссэн зах зээлийн магадлал («—» = бооцоо хараахан ороогүй, эхэлж тавьсан нь үнийг тогтооно).
               </P>
             </Card>
             {mine.n ? (

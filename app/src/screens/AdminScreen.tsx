@@ -478,19 +478,19 @@ function TournamentDetail({ id, refreshKey, onBack, onOpenMarket }: { id: string
 
       {pending.length >= 2 ? (
         <Card style={{ gap: 8 }}>
-          <H2>Тото үүсгэх (пул, 60/30/10)</H2>
+          <H2>Багц таавар үүсгэх (пул, 60/30/10)</H2>
           <P muted small>Хүлээгдэж буй {pending.length} барилдаанаас эхний {Math.min(16, pending.length)}-г авна. Оролцооны хураамж 100 токен.</P>
           <Button
             small
-            title={`Тото үүсгэх (${Math.min(16, pending.length)} барилдаан)`}
+            title={`Багц таавар үүсгэх (${Math.min(16, pending.length)} барилдаан)`}
             variant="accent"
             loading={busy}
             onPress={() =>
               run(async () => {
                 const boutIds = pending.slice(0, 16).map((b) => b.id);
-                await api('/api/admin/totos', { body: { title: `${t.name} — тото`, tournamentId: t.id, boutIds, fee: 100 } });
+                await api('/api/admin/totos', { body: { title: `${t.name} — багц таавар`, tournamentId: t.id, boutIds, fee: 100 } });
                 setTick((x) => x + 1);
-                return 'Тото нээгдлээ — «🎟 Тото» табаас харагдана.';
+                return 'Багц таавар нээгдлээ — «🎟 Багц таавар» табаас харагдана.';
               })
             }
           />
@@ -503,7 +503,7 @@ function TournamentDetail({ id, refreshKey, onBack, onOpenMarket }: { id: string
           {pending.slice(0, 30).map((b) => (
             <View key={b.id} style={s.boutRow}>
               <P small>
-                {b.round}-р даваа: {b.a.name} ({fmtPct(b.priorA)}) — {b.b.name}
+                {b.round}-р даваа: {b.a.name} ({fmtPct(b.priorA ?? 0.5)}) — {b.b.name}
               </P>
               <Row>
                 <Button small title={`${b.a.name} давав`} variant="secondary" loading={busy} onPress={() => run(async () => {

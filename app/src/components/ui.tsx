@@ -139,7 +139,7 @@ export function Pill({ text, color = theme.raised, textColor = theme.text }: { t
 }
 
 /** Үр дүнгийн магадлалын зурвас: зах зээл (тод) + загвар (тэмдэг). */
-export function ProbBar({ label, sub, prob, model, highlight, onPress, right }: { label: string; sub?: string; prob: number; model?: number; highlight?: boolean; onPress?: () => void; right?: string }) {
+export function ProbBar({ label, sub, prob, model, highlight, onPress, right }: { label: string; sub?: string; prob?: number; model?: number; highlight?: boolean; onPress?: () => void; right?: string }) {
   const inner = (
     <View style={s.probRow}>
       <View style={s.probHead}>
@@ -154,12 +154,12 @@ export function ProbBar({ label, sub, prob, model, highlight, onPress, right }: 
           ) : null}
         </View>
         <Text style={s.probPct}>
-          {fmtPct(prob)}
+          {prob === undefined ? '—' : fmtPct(prob)}
           {right ? <Text style={{ color: theme.muted, fontWeight: '400' }}> · {right}</Text> : null}
         </Text>
       </View>
       <View style={s.track}>
-        <View style={[s.fill, { width: `${Math.max(1, Math.round(prob * 100))}%` as unknown as number, backgroundColor: highlight ? theme.accent : theme.primary }]} />
+        {prob !== undefined ? <View style={[s.fill, { width: `${Math.max(1, Math.round(prob * 100))}%` as unknown as number, backgroundColor: highlight ? theme.accent : theme.primary }]} /> : null}
         {model !== undefined ? <View style={[s.marker, { left: `${Math.round(model * 100)}%` as unknown as number }]} /> : null}
       </View>
     </View>

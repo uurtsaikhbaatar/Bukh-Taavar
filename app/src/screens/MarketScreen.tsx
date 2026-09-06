@@ -189,11 +189,11 @@ export function MarketScreen({
             key={i}
             label={o}
             sub={m.wrestlers && i < 2 ? `${(i === 0 ? m.wrestlers.a : m.wrestlers.b).titleLabel}${(i === 0 ? m.wrestlers.a : m.wrestlers.b).place ? ` · ${(i === 0 ? m.wrestlers.a : m.wrestlers.b).place}` : ''}` : undefined}
-            prob={m.probs[i] ?? 0}
-            model={m.modelProbs[i]}
+            prob={m.probs[i]}
+            model={m.modelProbs?.[i]}
             highlight={tradable ? outcome === i : m.resolvedOutcome === i}
             onPress={tradable ? () => setOutcome(i) : undefined}
-            right={`×${(1 / Math.max(1e-6, m.probs[i] ?? 0.5)).toFixed(2)} · загвар ${fmtPct(m.modelProbs[i] ?? 0)}`}
+            right={m.probs[i] !== undefined ? `×${(1 / Math.max(1e-6, m.probs[i]!)).toFixed(2)}${m.modelProbs ? ` · загвар ${fmtPct(m.modelProbs[i] ?? 0)}` : ''}` : 'бооцоо ороогүй'}
           />
         ))}
         <P muted small>
@@ -210,7 +210,7 @@ export function MarketScreen({
                   key={i}
                   small
                   variant={inSlip ? 'accent' : 'secondary'}
-                  title={`${inSlip ? '✓' : '＋'} ${o} ×${(1 / Math.max(1e-6, m.probs[i] ?? 0.5)).toFixed(2)}`}
+                  title={`${inSlip ? '✓' : '＋'} ${o}${m.probs[i] !== undefined ? ` ×${(1 / Math.max(1e-6, m.probs[i]!)).toFixed(2)}` : ''}`}
                   onPress={() => onAddToSlip({ marketId: m.id, outcome: i, marketTitle: m.title, outcomeLabel: o, price: m.probs[i] ?? 0.5 })}
                 />
               );
@@ -233,9 +233,9 @@ export function MarketScreen({
             </P>
           ))}
           <Row style={{ justifyContent: 'space-between', marginTop: 4 }}>
-            <KV k={`Гинж ${h2h.chain.maxHops} үе (туршилтын)`} v={h2h.chain.connected ? fmtPct(h2h.chain.pA) : '—'} />
-            <KV k="Bradley–Terry" v={h2h.bt ? fmtPct(h2h.bt.pA) : '—'} />
-            <KV k="Elo (архив)" v={h2h.elo ? fmtPct(h2h.elo.pA) : '—'} />
+            {h2h.chain.pA !== undefined ? <KV k={`Гинж ${h2h.chain.maxHops} үе (туршилтын)`} v={h2h.chain.connected ? fmtPct(h2h.chain.pA) : '—'} /> : null}
+            {h2h.bt ? <KV k="Bradley–Terry" v={fmtPct(h2h.bt.pA)} /> : null}
+            {h2h.elo ? <KV k="Elo рейтинг" v={h2h.elo.pA !== undefined ? fmtPct(h2h.elo.pA) : `${h2h.elo.ratingA} — ${h2h.elo.ratingB}`} /> : null}
             <KV k="Нийт амжилт" v={`${h2h.a.wins}–${h2h.a.losses} / ${h2h.b.wins}–${h2h.b.losses}`} />
           </Row>
           {h2h.chain.pathsAB[0] ? (

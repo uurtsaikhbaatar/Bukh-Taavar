@@ -163,8 +163,14 @@ test('API: бүртгэл → баталгаажуулалт → админ тэ
     assert.equal(board.body.bouts.length, 1);
     assert.equal(board.body.bouts[0]!.marketId, marketId);
     assert.equal(board.body.bouts[0]!.status, 'open');
-    assert.ok(Math.abs(board.body.bouts[0]!.probs[0] - b.body.bout.priorA) < 1e-9);
+    // Энгийн хэрэглэгчид: бооцоо ороогүй тул хувь нуугдсан ([]), загварын магадлал огт явахгүй
+    assert.deepEqual(board.body.bouts[0]!.probs, []);
+    assert.equal(board.body.bouts[0]!.model, undefined);
     assert.equal(board.body.status.current, 9);
+    // Админд: хувь + загвар хоёул харагдана
+    const aboard = await admin.get<BoardDto>('/api/tournaments/naadam/board');
+    assert.ok(Math.abs(aboard.body.bouts[0]!.probs[0]! - b.body.bout.priorA!) < 1e-9);
+    assert.ok(Math.abs((aboard.body.bouts[0]!.model?.[0] ?? 0) - b.body.bout.priorA!) < 1e-9);
 
     // Quote ажиллана, buy → 403 (баталгаажаагүй)
     const q = await bat.post<QuoteDto>(`/api/markets/${marketId}/quote`, { outcome: 1, spend: 500 });

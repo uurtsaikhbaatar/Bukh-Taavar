@@ -43,6 +43,8 @@ import type {
   TournamentDto,
   TradeDto,
   TradeResultDto,
+  WrestlerBoutsDto,
+  WrestlerDetailDto,
   WrestlerDto,
 } from '../app/src/shared/api.ts';
 import type { Bout, Coupon, LedgerEntry, Market, Toto, Tournament, TradeRecord, Wrestler } from '../src/domain.ts';
@@ -153,15 +155,15 @@ export function createRouter(deps: ApiDeps): Router {
     return dto;
   };
 
-  const boutDto = (b: Bout): BoutDto => {
-    const prior = engine.priorForBout(b.aId, b.bId);
+  /** Загварын магадлал (priorA) зөвхөн админд — энгийн хэрэглэгч зөвхөн бооцооны үнийг харна. */
+  const boutDto = (b: Bout, admin = false): BoutDto => {
     const dto: BoutDto = {
       id: b.id,
       tournamentId: b.tournamentId,
       round: b.round,
       a: wrestlerDto(engine.wrestler(b.aId)),
       b: wrestlerDto(engine.wrestler(b.bId)),
-      priorA: prior.pA,
+      ...(admin ? { priorA: engine.priorForBout(b.aId, b.bId).pA } : {}),
     };
     if (b.result) dto.winnerId = b.result.winnerId;
     if (b.scheduledAt) dto.scheduledAt = b.scheduledAt;
@@ -179,7 +181,11 @@ export function createRouter(deps: ApiDeps): Router {
     return prices(m.q0, m.b);
   };
 
-  const marketDto = (m: Market, userId?: string): MarketDto => {
+  /**
+   * admin=false: загварын магадлал (modelProbs) явахгүй; бооцоо ОГТ ороогүй зах зээлийн
+   * probs = [] (эхлэлийн үнэ нь загварын таамаг тул нуугдана — «зөвхөн бооцооноос»).
+   */
+  const marketDto = (m: Market, userId?: string, admin = false): MarketDto => {
     const v = engine.marketView(m.id);
     const dto: MarketDto = {
       id: v.id,
@@ -188,8 +194,8 @@ export function createRouter(deps: ApiDeps): Router {
       status: v.status,
       outcomes: v.outcomes,
       outcomeRefs: v.outcomeRefs,
-      probs: v.probs,
-      modelProbs: modelProbs(m),
+      probs: admin || v.tradeCount > 0 || v.status === 'resolved' || v.status === 'voided' ? v.probs : [],
+      ...(admin ? { modelProbs: modelProbs(m) } : {}),
       b: v.b,
       volume: v.volume,
       tradeCount: v.tradeCount,
@@ -267,7 +273,8 @@ export function createRouter(deps: ApiDeps): Router {
     return dto;
   };
 
-  const boardDto = (tournamentId: string, round: number | undefined, userId: string): BoardDto => {
+  /** admin=false: загварын магадлал явахгүй; бооцоо ороогүй хосын probs = [] («—» харагдана). */
+  const boardDto = (tournamentId: string, round: number | undefined, userId: string, admin = false): BoardDto => {
     const t = engine.tournament(tournamentId);
     const status = roundStatusDto(t.id);
     const r = round && round >= 1 && round <= t.rounds ? round : status.current || 1;
@@ -285,22 +292,26 @@ export function createRouter(deps: ApiDeps): Router {
       .filter((b) => b.round === r)
       .map((b): BoardBoutDto => {
         const m = marketByBout.get(b.id);
-        const prior = engine.priorForBout(b.aId, b.bId);
+        const prior = admin ? engine.priorForBout(b.aId, b.bId) : undefined;
         const row: BoardBoutDto = {
           id: b.id,
           round: b.round,
           status: m ? m.status : 'none',
           a: side(b.aId),
           b: side(b.bId),
-          probs: [prior.pA, prior.pB],
-          model: [prior.pA, prior.pB],
+          probs: prior ? [prior.pA, prior.pB] : [],
+          ...(prior ? { model: [prior.pA, prior.pB] as [number, number] } : {}),
           volume: 0,
         };
         if (m) {
           const v = engine.marketView(m.id);
           row.marketId = m.id;
           // Зах зээлийн үр дүнгүүд [А, Б] дарааллаар үүсдэг (createBout)
-          row.probs = [v.probs[0] ?? prior.pA, v.probs[1] ?? prior.pB];
+          if (admin || v.tradeCount > 0 || v.status === 'resolved' || v.status === 'voided') {
+            row.probs = [v.probs[0] ?? 0.5, v.probs[1] ?? 0.5];
+          } else {
+            row.probs = [];
+          }
           row.volume = v.volume;
           const pos = m.positions.get(userId);
           if (pos && pos.some((s) => s > 1e-9)) {
@@ -367,7 +378,7 @@ export function createRouter(deps: ApiDeps): Router {
     return dto;
   };
 
-  const totoDto = (t: Toto, userId?: string): TotoDto => {
+  const totoDto = (t: Toto, userId?: string, admin = false): TotoDto => {
     const brief = (id: string) => {
       const w = engine.state.wrestlers.get(id);
       const r = engine.rating(id);
@@ -377,8 +388,8 @@ export function createRouter(deps: ApiDeps): Router {
     };
     const bouts: TotoDto['bouts'] = t.boutIds.map((id) => {
       const b = engine.bout(id);
-      const prior = engine.priorForBout(b.aId, b.bId);
-      const row: TotoDto['bouts'][number] = { boutId: b.id, round: b.round, a: brief(b.aId), b: brief(b.bId), priorA: prior.pA };
+      const row: TotoDto['bouts'][number] = { boutId: b.id, round: b.round, a: brief(b.aId), b: brief(b.bId) };
+      if (admin) row.priorA = engine.priorForBout(b.aId, b.bId).pA;
       if (b.result) row.winnerId = b.result.winnerId;
       return row;
     });
@@ -585,7 +596,7 @@ export function createRouter(deps: ApiDeps): Router {
         .tournaments()
         .sort((a, b) => b.date.localeCompare(a.date))
         .map(tournamentDto),
-      markets: [...open, ...done].map((m) => marketDto(m, acc.id)),
+      markets: [...open, ...done].map((m) => marketDto(m, acc.id, acc.role === 'admin')),
     };
   });
 
@@ -596,14 +607,14 @@ export function createRouter(deps: ApiDeps): Router {
     let list = [...engine.state.markets.values()];
     if (status) list = list.filter((m) => m.status === status);
     if (tournamentId) list = list.filter((m) => m.tournamentId === tournamentId);
-    return { markets: list.map((m) => marketDto(m, acc.id)) };
+    return { markets: list.map((m) => marketDto(m, acc.id, acc.role === 'admin')) };
   });
 
   router.get('/api/markets/:id', async (ctx): Promise<MarketDetailDto> => {
     const acc = await requireUser(ctx);
     const m = engine.market(ctx.params.id!);
     const dto: MarketDetailDto = {
-      market: marketDto(m, acc.id),
+      market: marketDto(m, acc.id, acc.role === 'admin'),
       recentTrades: [...engine.state.trades.values()]
         .filter((t) => t.marketId === m.id)
         .slice(-20)
@@ -612,7 +623,7 @@ export function createRouter(deps: ApiDeps): Router {
     };
     if (m.boutId) {
       const b = engine.state.bouts.get(m.boutId);
-      if (b) dto.bout = boutDto(b);
+      if (b) dto.bout = boutDto(b, acc.role === 'admin');
     }
     return dto;
   });
@@ -731,12 +742,12 @@ export function createRouter(deps: ApiDeps): Router {
     if (st === 'open' || st === 'settled' || st === 'voided') filter.status = st;
     const tid = ctx.query.get('tournamentId');
     if (tid) filter.tournamentId = tid;
-    return { totos: engine.totos(filter).map((t) => totoDto(t, acc.id)) };
+    return { totos: engine.totos(filter).map((t) => totoDto(t, acc.id, acc.role === 'admin')) };
   });
 
   router.get('/api/totos/:id', async (ctx): Promise<TotoDto> => {
     const acc = await requireUser(ctx);
-    return totoDto(engine.toto(ctx.params.id!), acc.id);
+    return totoDto(engine.toto(ctx.params.id!), acc.id, acc.role === 'admin');
   });
 
   router.post('/api/totos/:id/enter', async (ctx): Promise<{ toto: TotoDto; balance: number }> => {
@@ -749,7 +760,7 @@ export function createRouter(deps: ApiDeps): Router {
     const t = engine.enterToto(acc.id, ctx.params.id!, picks, optStr(ctx.body, 'requestId'));
     await persist();
     changed(undefined, [acc.id]);
-    return { toto: totoDto(t, acc.id), balance: engine.balance(acc.id) };
+    return { toto: totoDto(t, acc.id, acc.role === 'admin'), balance: engine.balance(acc.id) };
   });
 
   router.post('/api/admin/totos', async (ctx) => {
@@ -767,7 +778,7 @@ export function createRouter(deps: ApiDeps): Router {
     const t = engine.createToto(input);
     await persist();
     changed();
-    return { toto: totoDto(t) };
+    return { toto: totoDto(t, undefined, true) };
   });
 
   router.post('/api/admin/totos/:id/settle', async (ctx) => {
@@ -775,7 +786,7 @@ export function createRouter(deps: ApiDeps): Router {
     const t = engine.settleToto(ctx.params.id!);
     await persist();
     changed(undefined, [...t.entries.keys()]);
-    return { toto: totoDto(t, acc.id) };
+    return { toto: totoDto(t, acc.id, true) };
   });
 
   router.get('/api/leaderboard', async (ctx): Promise<{ rows: LeaderboardRowDto[] }> => {
@@ -794,8 +805,8 @@ export function createRouter(deps: ApiDeps): Router {
     return {
       tournament: tournamentDto(t),
       status: roundStatusDto(t.id),
-      bouts: engine.bouts(t.id).sort((a, b) => a.round - b.round).map(boutDto),
-      markets: engine.markets({ tournamentId: t.id }).map((m) => marketDto(m, acc.id)),
+      bouts: engine.bouts(t.id).sort((a, b) => a.round - b.round).map((x) => boutDto(x, acc.role === 'admin')),
+      markets: engine.markets({ tournamentId: t.id }).map((m) => marketDto(m, acc.id, acc.role === 'admin')),
     };
   });
 
@@ -803,11 +814,11 @@ export function createRouter(deps: ApiDeps): Router {
   router.get('/api/tournaments/:id/board', async (ctx): Promise<BoardDto> => {
     const acc = await requireUser(ctx);
     const round = Number(ctx.query.get('round') ?? '') || undefined;
-    return boardDto(ctx.params.id!, round, acc.id);
+    return boardDto(ctx.params.id!, round, acc.id, acc.role === 'admin');
   });
 
   router.get('/api/tournaments/:id/forecast', async (ctx) => {
-    await requireUser(ctx);
+    await requireAdmin(ctx); // прогноз = загварын гаралт — энгийн хэрэглэгчид харагдахгүй
     const opts: Parameters<ForecastService['dto']>[1] = { top: Math.min(50, Number(ctx.query.get('top') ?? 15) || 15) };
     const w = ctx.query.get('wrestlerId');
     if (w) opts.wrestlerId = w;
@@ -838,9 +849,44 @@ export function createRouter(deps: ApiDeps): Router {
     return { wrestlers: list.slice(0, limit).map(wrestlerDto), total: list.length };
   });
 
+  /** Бөхийн дэлгэрэнгүй + архивын давалт–алдагдал. */
+  router.get('/api/wrestlers/:id', async (ctx): Promise<WrestlerDetailDto> => {
+    await requireUser(ctx);
+    const w = engine.wrestler(ctx.params.id!);
+    const dto: WrestlerDetailDto = { wrestler: wrestlerDto(w) };
+    const wid = w.devjeeId ?? w.id;
+    if (deps.analytics && deps.analytics.archive.wrestlers[wid]) dto.record = deps.analytics.record(wid);
+    return dto;
+  });
+
+  /** Бөхийн бүх барилдааны түүх (архиваас, шинэ нь эхэндээ). */
+  router.get('/api/wrestlers/:id/bouts', async (ctx): Promise<WrestlerBoutsDto> => {
+    await requireUser(ctx);
+    if (!deps.analytics) throw new HttpError(503, 'Архив ачаалагдаагүй (npm run archive).', 'NO_ARCHIVE');
+    const w = engine.wrestler(ctx.params.id!);
+    const wid = w.devjeeId ?? w.id;
+    const offset = Math.max(0, Number(ctx.query.get('offset') ?? 0) || 0);
+    const limit = Math.min(100, Math.max(1, Number(ctx.query.get('limit') ?? 50) || 50));
+    const r = deps.analytics.wrestlerBouts(wid, offset, limit);
+    return {
+      total: r.total,
+      offset: r.offset,
+      rows: r.rows.map((x) => ({
+        date: x.date,
+        tournamentName: x.tournamentName,
+        round: x.round,
+        opponentId: x.opponentId,
+        opponentName: x.opponentName,
+        opponentTitleLabel: titleLabel(x.opponentTitle),
+        won: x.won,
+        ...(x.noShow ? { noShow: true } : {}),
+      })),
+    };
+  });
+
   // ── хоорондын харьцаа (архив) ──
   router.get('/api/h2h', async (ctx) => {
-    await requireUser(ctx);
+    const acc = await requireUser(ctx);
     if (!deps.analytics) throw new HttpError(503, 'Архивын шинжилгээ идэвхгүй (npm run archive).', 'NO_ARCHIVE');
     const toWid = (v: string): string => {
       const w = engine.state.wrestlers.get(v);
@@ -850,7 +896,16 @@ export function createRouter(deps: ApiDeps): Router {
     const b = ctx.query.get('b');
     if (!a || !b) throw new HttpError(400, 'a ба b (бөхийн id) хэрэгтэй.', 'BAD_INPUT');
     const hops = Math.min(15, Math.max(1, Number(ctx.query.get('hops') ?? 10) || 10));
-    return deps.analytics.h2h(toWid(a), toWid(b), hops);
+    const dto = deps.analytics.h2h(toWid(a), toWid(b), hops);
+    if (acc.role !== 'admin') {
+      // Энгийн хэрэглэгчид бодит түүх (харьцаа, барилдаанууд, замууд, рейтинг) л очно — магадлалын тоонууд очихгүй
+      delete dto.chain.pA;
+      delete dto.chain.perHop;
+      for (const p of [...dto.chain.pathsAB, ...dto.chain.pathsBA]) delete p.prob;
+      dto.bt = null;
+      if (dto.elo) delete dto.elo.pA;
+    }
+    return dto;
   });
 
   // ── SSE ──
@@ -1016,7 +1071,7 @@ export function createRouter(deps: ApiDeps): Router {
     const { bout, market } = engine.createBout(input);
     await persist();
     changed(market ? [market.id] : undefined);
-    return { bout: boutDto(bout), market: market ? marketDto(market) : null };
+    return { bout: boutDto(bout, true), market: market ? marketDto(market, undefined, true) : null };
   });
 
   router.post('/api/admin/bouts/:id/result', async (ctx) => {
@@ -1024,7 +1079,7 @@ export function createRouter(deps: ApiDeps): Router {
     const r = engine.recordBoutResult(ctx.params.id!, str(ctx.body, 'winnerId'));
     await persist();
     changed(r.resolvedMarkets.map((m) => m.id));
-    return { bout: boutDto(r.bout), resolved: r.resolvedMarkets.length };
+    return { bout: boutDto(r.bout, true), resolved: r.resolvedMarkets.length };
   });
 
   router.post('/api/admin/markets', async (ctx) => {
@@ -1041,7 +1096,7 @@ export function createRouter(deps: ApiDeps): Router {
     const m = engine.createMarket(input);
     await persist();
     changed([m.id]);
-    return { market: marketDto(m) };
+    return { market: marketDto(m, undefined, true) };
   });
 
   /** Дүрэмт зах зээл: {rule:{type,...}, b?, closesAt?} — анхны магадлал прогнозоос. */
@@ -1076,7 +1131,7 @@ export function createRouter(deps: ApiDeps): Router {
     engine.closeMarket(ctx.params.id!);
     await persist();
     changed([ctx.params.id!]);
-    return { market: marketDto(engine.market(ctx.params.id!)) };
+    return { market: marketDto(engine.market(ctx.params.id!), undefined, true) };
   });
 
   router.post('/api/admin/markets/:id/resolve', async (ctx) => {
@@ -1084,7 +1139,7 @@ export function createRouter(deps: ApiDeps): Router {
     const r = engine.resolveMarket(ctx.params.id!, num(ctx.body, 'outcome'));
     await persist();
     changed([ctx.params.id!], r.payouts.map((p) => p.userId));
-    return { market: marketDto(engine.market(ctx.params.id!)), payouts: r.payouts };
+    return { market: marketDto(engine.market(ctx.params.id!), undefined, true), payouts: r.payouts };
   });
 
   router.post('/api/admin/markets/:id/void', async (ctx) => {
@@ -1092,7 +1147,7 @@ export function createRouter(deps: ApiDeps): Router {
     const r = engine.voidMarket(ctx.params.id!, optStr(ctx.body, 'reason') ?? 'хүчингүй');
     await persist();
     changed([ctx.params.id!], r.refunds.map((p) => p.userId));
-    return { market: marketDto(engine.market(ctx.params.id!)), refunds: r.refunds };
+    return { market: marketDto(engine.market(ctx.params.id!), undefined, true), refunds: r.refunds };
   });
 
   // ── devjee ──

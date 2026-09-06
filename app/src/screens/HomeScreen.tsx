@@ -36,8 +36,8 @@ export function MarketCard({ m, onOpen }: { m: MarketDto; onOpen: (id: string) =
           key={i}
           label={o}
           sub={m.wrestlers ? wrestlerLine(i === 0 ? m.wrestlers.a : i === 1 ? m.wrestlers.b : undefined) : undefined}
-          prob={m.probs[i] ?? 0}
-          model={m.modelProbs[i]}
+          prob={m.probs[i]}
+          model={m.modelProbs?.[i]}
           highlight={m.status === 'resolved' ? m.resolvedOutcome === i : (mine?.[i] ?? 0) > 0.5}
           right={mine && (mine[i] ?? 0) > 0.5 ? `миний ${fmtTokens(mine[i]!)} хувь` : undefined}
         />

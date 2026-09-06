@@ -129,6 +129,55 @@ export class Analytics {
     return this.archive.wrestlers[id]?.name ?? id;
   }
 
+  /** wid → архивын барилдаануудын индексүүд (нэг удаа байгуулагдана). */
+  private boutIndex: Map<string, number[]> | undefined;
+
+  private ensureBoutIndex(): Map<string, number[]> {
+    if (this.boutIndex) return this.boutIndex;
+    const idx = new Map<string, number[]>();
+    this.archive.bouts.forEach((b, i) => {
+      if (b.winner !== 1 && b.winner !== 2) return;
+      (idx.get(b.w1) ?? idx.set(b.w1, []).get(b.w1)!).push(i);
+      (idx.get(b.w2) ?? idx.set(b.w2, []).get(b.w2)!).push(i);
+    });
+    this.boutIndex = idx;
+    return idx;
+  }
+
+  /** Бөхийн архивын нийт давалт–алдагдал. */
+  record(wid: string): { wins: number; losses: number } {
+    const r = this.graph.record(wid);
+    return { wins: r.wins, losses: r.losses };
+  }
+
+  /** Бөхийн бүх барилдааны түүх — шинэ нь эхэндээ, хуудаслалттай. */
+  wrestlerBouts(wid: string, offset = 0, limit = 50): { total: number; offset: number; rows: { date: string; tournamentName: string; round: number; opponentId: string; opponentName: string; opponentTitle: import('../src/rating.ts').Title; won: boolean; noShow?: boolean }[] } {
+    const indices = this.ensureBoutIndex().get(wid) ?? [];
+    const sorted = [...indices].sort((x, y) => {
+      const a = this.archive.bouts[x]!;
+      const b = this.archive.bouts[y]!;
+      return b.date.localeCompare(a.date) || b.round - a.round;
+    });
+    const rows = sorted.slice(offset, offset + limit).map((i) => {
+      const b = this.archive.bouts[i]!;
+      const meFirst = b.w1 === wid;
+      const oppId = meFirst ? b.w2 : b.w1;
+      const opp = this.archive.wrestlers[oppId];
+      const row: ReturnType<Analytics['wrestlerBouts']>['rows'][number] = {
+        date: b.date,
+        tournamentName: this.archive.tournaments.get(b.tid)?.name ?? '',
+        round: b.round,
+        opponentId: oppId,
+        opponentName: opp?.name ?? oppId,
+        opponentTitle: opp?.title ?? 'цолгүй',
+        won: meFirst ? b.winner === 1 : b.winner === 2,
+      };
+      if (b.noShow) row.noShow = true;
+      return row;
+    });
+    return { total: sorted.length, offset, rows };
+  }
+
   /**
    * a, b — devjee wid. Гинжийн параметр: backtest-ээр тохируулсан (β=0.8, smooth=0.002,
    * shrink=0.6 → log-loss ≈0.68); гинж нь тайлбарт сайн, таамагт Elo/BT илүү.
