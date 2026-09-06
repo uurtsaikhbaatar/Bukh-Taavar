@@ -70,6 +70,8 @@ export interface ApiDeps {
   secureCookies?: boolean;
   /** flush бүтэлгүйтэх зэрэг ноцтой алдаа — анхдагч: лог бичээд процесс зогсооно. */
   onFatal?: (err: unknown) => void;
+  /** /health-д харуулах орчны мэдээлэл (нууц биш). */
+  info?: { storage: 'postgres' | 'jsonl'; email: string };
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
@@ -476,7 +478,13 @@ export function createRouter(deps: ApiDeps): Router {
   };
 
   // ── health ──
-  router.get('/health', () => ({ ok: true, events: engine.state.eventCount, users: engine.state.users.size, sse: hub.size }));
+  router.get('/health', () => ({
+    ok: true,
+    events: engine.state.eventCount,
+    users: engine.state.users.size,
+    sse: hub.size,
+    ...(deps.info ? { storage: deps.info.storage, email: deps.info.email, archive: deps.analytics ? deps.analytics.archive.bouts.length : 0 } : {}),
+  }));
 
   // ── бүртгэл / нэвтрэлт ──
   router.post('/api/register', async (ctx) => {

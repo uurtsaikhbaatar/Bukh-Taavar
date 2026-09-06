@@ -105,9 +105,45 @@ export function seedRating(title: Title): number {
   return titleInfo(title).seed;
 }
 
-/** А бөх Б бөхийг давах магадлал (Elo логистик). */
+/**
+ * А бөх Б бөхийг давах магадлал (Elo логистик, 400) — РЕЙТИНГИЙН ШИНЭЧЛЭЛД (devjee масштаб).
+ * Таамаглалд `predictProbability`-г хэрэглэ (калибровкдсон).
+ */
 export function winProbability(ratingA: number, ratingB: number): number {
   return 1 / (1 + Math.pow(10, (ratingB - ratingA) / ELO_SCALE));
+}
+
+/**
+ * Таамгийн калибровк (2026-09-06, `scripts/calib-tune.ts`): архивын 246 845 барилдааныг
+ * он цагаар гүйж (look-ahead хаалттай), 2023 хүртэлхээр сургаад 2024/2025/2026 дээр
+ * шалгасан logistic — log-loss 0.5186 → 0.5044 (жил бүрд Elo-гоос сайн). Жинг бүх
+ * өгөгдлөөр дахин тохируулсан. Онцлогууд:
+ *   z = DR·(Δрейтинг/400) + EXP·ln((1+g_A)/(1+g_B)) + REST·ln((1+d_A)/(1+d_B))
+ * g = өмнөх барилдааны тоо (туршлага давуу), d = сүүлд барилдснаас хойшх хоног
+ * (≤3 жил; удаан завсарласан нь сул). Мэдээлэл дутуу талыг тэнцүү гэж үзнэ.
+ */
+export const PREDICT_WEIGHTS = { dr: 2.0267, experience: 0.2469, rest: -0.1719 } as const;
+export const REST_CAP_DAYS = 1095;
+
+export interface PredictSide {
+  rating: number;
+  /** Өмнөх (бодит) барилдааны тоо. */
+  games?: number;
+  /** Сүүлд барилдснаас хойшх хоног. */
+  daysSinceLast?: number;
+}
+
+export function predictProbability(a: PredictSide, b: PredictSide): number {
+  let z = (PREDICT_WEIGHTS.dr * (a.rating - b.rating)) / ELO_SCALE;
+  if (a.games !== undefined && b.games !== undefined) {
+    z += PREDICT_WEIGHTS.experience * Math.log((1 + Math.max(0, a.games)) / (1 + Math.max(0, b.games)));
+  }
+  if (a.daysSinceLast !== undefined && b.daysSinceLast !== undefined) {
+    const da = Math.min(Math.max(0, a.daysSinceLast), REST_CAP_DAYS);
+    const db = Math.min(Math.max(0, b.daysSinceLast), REST_CAP_DAYS);
+    z += PREDICT_WEIGHTS.rest * Math.log((1 + da) / (1 + db));
+  }
+  return 1 / (1 + Math.exp(-z));
 }
 
 /**

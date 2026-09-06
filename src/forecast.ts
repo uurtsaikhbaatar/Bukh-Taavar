@@ -11,11 +11,15 @@
  * Үүнээс: аварга (k = rounds), финалд (k ≥ rounds−1), N.5-аас дээш, яг N, matchup.
  */
 
-import { winProbability } from './rating.ts';
+import { PREDICT_WEIGHTS, REST_CAP_DAYS } from './rating.ts';
 
 export interface ForecastEntrant {
   id: string;
   rating: number;
+  /** Бодит барилдааны тоо (таамгийн калибровкид) — байхгүй бол тэнцүү гэж үзнэ. */
+  games?: number;
+  /** Сүүлд барилдснаас хойшх хоног — симийн эхний даваанд л нөлөөлнө. */
+  daysSinceLast?: number;
 }
 
 export interface KnownResult {
@@ -67,9 +71,21 @@ export function forecastTournament(input: ForecastInput): Forecast {
   const n = ids.length;
   const index = new Map<string, number>(ids.map((id, i) => [id, i]));
   const rating = new Float64Array(n);
+  // Калибровкдсон таамгийн онцлогууд: lg = ln(1+туршлага), ld = ln(1+амралтын хоног) — NaN = мэдэгдэхгүй
+  const lg = new Float64Array(n).fill(NaN);
+  const ld = new Float64Array(n).fill(NaN);
   input.entrants.forEach((e, i) => {
     rating[i] = e.rating;
+    if (e.games !== undefined) lg[i] = Math.log(1 + Math.max(0, e.games));
+    if (e.daysSinceLast !== undefined) ld[i] = Math.log(1 + Math.min(Math.max(0, e.daysSinceLast), REST_CAP_DAYS));
   });
+  /** predictProbability-тай ижил z; амралтын гишүүн зөвхөн 1-р даваанд (дараа нь бүгд «өнөөдөр» барилдсан). */
+  const pairP = (a: number, b: number, round: number): number => {
+    let z = (PREDICT_WEIGHTS.dr * (rating[a]! - rating[b]!)) / 400;
+    if (!Number.isNaN(lg[a]!) && !Number.isNaN(lg[b]!)) z += PREDICT_WEIGHTS.experience * (lg[a]! - lg[b]!);
+    if (round === 1 && !Number.isNaN(ld[a]!) && !Number.isNaN(ld[b]!)) z += PREDICT_WEIGHTS.rest * (ld[a]! - ld[b]!);
+    return 1 / (1 + Math.exp(-z));
+  };
 
   // Мэдэгдсэн үр дүн: даваа → [давагч idx, давагдагч idx][]
   const knownByRound = new Map<number, [number, number][]>();
@@ -152,7 +168,7 @@ export function forecastTournament(input: ForecastInput): Forecast {
       for (let k = 0; k + 1 < m; k += 2) {
         const a = order[k]!;
         const b = order[k + 1]!;
-        const pA = winProbability(rating[a]!, rating[b]!);
+        const pA = pairP(a, b, round);
         const w = rnd() < pA ? a : b;
         wins[w] = round;
         survivors.push(w);

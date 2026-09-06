@@ -98,6 +98,7 @@ async function main(): Promise<void> {
     flush,
     hub,
     secureCookies: process.env.SECURE_COOKIES === '1',
+    info: { storage: process.env.DATABASE_URL ? 'postgres' : 'jsonl', email: emailProvider() },
     ...(devjee ? { devjee } : {}),
     ...(analytics ? { analytics } : {}),
   });

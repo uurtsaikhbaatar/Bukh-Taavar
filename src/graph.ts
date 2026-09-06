@@ -426,10 +426,15 @@ export interface EloReplayOptions {
  * Барилдаануудыг огноогоор дараалуулан Elo тооцно (devjee: K=32).
  * Буцаах: id → рейтинг, мөн барилдаан бүрийн өмнөх таамаг (калибровкид).
  */
-export function eloReplay(bouts: ArchiveBout[], options: EloReplayOptions = {}): { ratings: Map<string, number>; predictions: { date: string; p1: number; won1: boolean }[] } {
+export function eloReplay(
+  bouts: ArchiveBout[],
+  options: EloReplayOptions = {},
+): { ratings: Map<string, number>; predictions: { date: string; p1: number; won1: boolean }[]; games: Map<string, number>; lastDate: Map<string, string> } {
   const k = options.k ?? 32;
   const seed = options.seed ?? (() => 1500);
   const ratings = new Map<string, number>();
+  const games = new Map<string, number>();
+  const lastDate = new Map<string, string>();
   const predictions: { date: string; p1: number; won1: boolean }[] = [];
   const get = (id: string) => ratings.get(id) ?? seed(id);
   const excludeNoShow = options.excludeNoShow ?? true;
@@ -444,8 +449,12 @@ export function eloReplay(bouts: ArchiveBout[], options: EloReplayOptions = {}):
     const [n1, n2] = updateRatings(r1, r2, b.winner === 1, k);
     ratings.set(b.w1, n1);
     ratings.set(b.w2, n2);
+    games.set(b.w1, (games.get(b.w1) ?? 0) + 1);
+    games.set(b.w2, (games.get(b.w2) ?? 0) + 1);
+    lastDate.set(b.w1, b.date);
+    lastDate.set(b.w2, b.date);
   }
-  return { ratings, predictions };
+  return { ratings, predictions, games, lastDate };
 }
 
 /** Архивын бөхийн цолын суурь рейтинг (devjee код → манай цол → суурь). */

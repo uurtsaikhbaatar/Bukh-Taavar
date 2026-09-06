@@ -39,7 +39,7 @@ import type {
 } from './domain.ts';
 import type { BukhEvent } from './events.ts';
 import { costToBuy, initialQuantities, maxLossFromInitial, prices, sharesForSpend } from './lmsr.ts';
-import { DEFAULT_K, isTitle, seedRating, updateRatings, winProbability } from './rating.ts';
+import { DEFAULT_K, isTitle, predictProbability, seedRating, updateRatings, winProbability, type PredictSide } from './rating.ts';
 import { apply, emptyState, type State } from './state.ts';
 import type { EventLog } from './store.ts';
 
@@ -405,25 +405,45 @@ export class Engine {
     return undefined;
   }
 
-  setRating(wrestlerId: WrestlerId, rating: number, source: RatingSource, asOf?: string): void {
+  setRating(wrestlerId: WrestlerId, rating: number, source: RatingSource, asOf?: string, meta: { games?: number; lastBoutAt?: string } = {}): void {
     this.requireWrestler(wrestlerId);
     if (!Number.isFinite(rating)) throw new EngineError('BAD_RATING', 'Рейтинг тоо байх ёстой.');
-    this.emit({ ...this.stamp(), type: 'rating_set', wrestlerId, rating, source, asOf: asOf ?? this.nowIso().slice(0, 10) });
+    const e: Extract<BukhEvent, { type: 'rating_set' }> = { ...this.stamp(), type: 'rating_set', wrestlerId, rating, source, asOf: asOf ?? this.nowIso().slice(0, 10) };
+    if (meta.games !== undefined) e.games = meta.games;
+    if (meta.lastBoutAt !== undefined) e.lastBoutAt = meta.lastBoutAt;
+    this.emit(e);
   }
 
   /** Бөхийн рейтинг: тогтоосон бол тэр, үгүй бол цолын суурь. */
-  rating(wrestlerId: WrestlerId): { rating: number; source: RatingSource; asOf?: string } {
+  rating(wrestlerId: WrestlerId): { rating: number; source: RatingSource; asOf?: string; games?: number; lastBoutAt?: string } {
     const w = this.requireWrestler(wrestlerId);
     const r = this.state.ratings.get(wrestlerId);
-    if (r) return { rating: r.rating, source: r.source, asOf: r.asOf };
+    if (r) {
+      const out: ReturnType<Engine['rating']> = { rating: r.rating, source: r.source, asOf: r.asOf };
+      if (r.games !== undefined) out.games = r.games;
+      if (r.lastBoutAt !== undefined) out.lastBoutAt = r.lastBoutAt;
+      return out;
+    }
     return { rating: seedRating(w.title), source: 'seed' };
   }
 
-  /** Хоёр бөхийн барилдааны загварын магадлал (Elo). */
+  /** Таамгийн тал: рейтинг + туршлага + сүүлд барилдснаас хойшх хоног. */
+  predictSide(wrestlerId: WrestlerId): PredictSide {
+    const r = this.rating(wrestlerId);
+    const side: PredictSide = { rating: r.rating };
+    if (r.games !== undefined) side.games = r.games;
+    if (r.lastBoutAt !== undefined) {
+      const days = Math.floor((this.opts.now().getTime() - Date.parse(r.lastBoutAt)) / 86_400_000);
+      if (Number.isFinite(days)) side.daysSinceLast = Math.max(0, days);
+    }
+    return side;
+  }
+
+  /** Хоёр бөхийн барилдааны загварын магадлал (калибровкдсон Elo — рейтинг, туршлага, амралт). */
   priorForBout(aId: WrestlerId, bId: WrestlerId): BoutPrior {
     const a = this.rating(aId);
     const b = this.rating(bId);
-    const pA = winProbability(a.rating, b.rating);
+    const pA = predictProbability(this.predictSide(aId), this.predictSide(bId));
     return { aId, bId, ratingA: a.rating, ratingB: b.rating, sourceA: a.source, sourceB: b.source, pA, pB: 1 - pA };
   }
 

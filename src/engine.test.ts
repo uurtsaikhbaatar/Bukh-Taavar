@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { Engine, EngineError } from './engine.ts';
-import { winProbability } from './rating.ts';
+import { predictProbability, winProbability } from './rating.ts';
 import { serializeState } from './state.ts';
 import { JsonlLog, MemoryLog } from './store.ts';
 
@@ -52,8 +52,8 @@ function seeded() {
 
 test('амьдралын мөчлөг: prior → авах → үнэ хөдлөх → зарах → үр дүн → төлбөр → самбар', () => {
   const { engine, market } = seeded();
-  // Prior = Elo(2354, 2301)
-  const pA = winProbability(2354, 2301);
+  // Prior = калибровкдсон таамаг (туршлага мэдэгдэхгүй → зөвхөн рейтинг)
+  const pA = predictProbability({ rating: 2354 }, { rating: 2301 });
   const probs0 = engine.probabilities(market.id);
   assert.ok(Math.abs(probs0[0]! - pA) < 1e-9);
   assert.equal(market.kind, 'bout');
@@ -115,6 +115,10 @@ test('амьдралын мөчлөг: prior → авах → үнэ хөдлө�
   assert.ok(r1.rating < 2354 && r2.rating > 2301);
   assert.ok(Math.abs(r1.rating + r2.rating - (2354 + 2301)) < 1e-9);
   assert.ok(Math.abs(2301 + 32 * (1 - winProbability(2301, 2354)) - r2.rating) < 1e-9);
+  // Туршлага хөтлөгдөнө: барилдаан бүр games +1, lastBoutAt шинэчлэгдэнэ
+  assert.equal(r1.games, 1);
+  assert.equal(r2.games, 1);
+  assert.ok(r1.lastBoutAt);
 
   // Самбар: u1 давсан, дараа нь u2, дараа нь admin (юу ч хийгээгүй)
   const lb = engine.leaderboard();
@@ -317,7 +321,7 @@ test('олон арилжааны дараа ч инвариант, хаусын
   assert.ok(m.tradeCount > 200);
   const winner = rnd() < 0.5 ? 0 : 1;
   const bound = engine.marketView(market.id).maxHouseLoss;
-  const p0 = winProbability(2354, 2301);
+  const p0 = predictProbability({ rating: 2354 }, { rating: 2301 });
   assert.ok(Math.abs(bound - 1_000 * Math.log(1 / Math.min(p0, 1 - p0))) < 1e-6);
   engine.resolveMarket(market.id, winner);
   engine.checkInvariants();

@@ -70,6 +70,10 @@ export interface RatingEntry {
   source: RatingSource;
   /** Рейтинг аль өдрийн байдлаар вэ (YYYY-MM-DD эсвэл ISO). */
   asOf: string;
+  /** Бодит барилдааны тоо (таамгийн калибровкид) — мэдэгдэхгүй бол undefined. */
+  games?: number;
+  /** Сүүлд барилдсан огноо (таамгийн «амралтын» гишүүнд). */
+  lastBoutAt?: string;
 }
 
 export interface Tournament {

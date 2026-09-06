@@ -9,7 +9,7 @@ import path from 'node:path';
 import type { H2hDto } from '../app/src/shared/api.ts';
 import type { Engine } from '../src/engine.ts';
 import { BoutGraph, eloReplay, loadArchive, type Archive } from '../src/graph.ts';
-import { titleLabel } from '../src/rating.ts';
+import { predictProbability, titleLabel } from '../src/rating.ts';
 
 /**
  * Архивын Elo replay-ийн суурь: 1300 → devjee.mn-ийн рейтингтэй ±10 дотор таардаг
@@ -28,13 +28,19 @@ export class Analytics {
   readonly archive: Archive;
   readonly graph: BoutGraph;
   readonly elo: Map<string, number>;
+  /** Архив дахь бодит барилдааны тоо (таамгийн калибровкид). */
+  readonly games: Map<string, number>;
+  /** Архив дахь сүүлийн барилдааны огноо. */
+  readonly lastBout: Map<string, string>;
   readonly latestDate: string;
   readonly loadedAt = new Date().toISOString();
 
-  private constructor(archive: Archive, graph: BoutGraph, elo: Map<string, number>, latestDate: string) {
+  private constructor(archive: Archive, graph: BoutGraph, replay: ReturnType<typeof eloReplay>, latestDate: string) {
     this.archive = archive;
     this.graph = graph;
-    this.elo = elo;
+    this.elo = replay.ratings;
+    this.games = replay.games;
+    this.lastBout = replay.lastDate;
     this.latestDate = latestDate;
   }
 
@@ -44,11 +50,11 @@ export class Analytics {
     const archive = loadArchive(dir);
     const graph = new BoutGraph(archive.bouts, { halfLifeYears: 4 });
     graph.bradleyTerry();
-    const { ratings } = eloReplay(archive.bouts, { seed: () => ARCHIVE_ELO_SEED });
+    const replay = eloReplay(archive.bouts, { seed: () => ARCHIVE_ELO_SEED });
     let latest = '';
     for (const b of archive.bouts) if (b.date > latest) latest = b.date;
     log(`[analytics] архив: ${archive.bouts.length} барилдаан, ${graph.size} бөх, ${archive.tournaments.size} тэмцээн · BT+Elo ${((performance.now() - t0) / 1000).toFixed(1)} сек`);
-    return new Analytics(archive, graph, ratings, latest || new Date().toISOString().slice(0, 10));
+    return new Analytics(archive, graph, replay, latest || new Date().toISOString().slice(0, 10));
   }
 
   /**
@@ -99,11 +105,20 @@ export class Analytics {
       const r = this.elo.get(wid);
       if (r !== undefined) {
         const cur = engine.state.ratings.get(id);
+        const meta: { games?: number; lastBoutAt?: string } = {};
+        const g = this.games.get(wid);
+        const lb = this.lastBout.get(wid);
+        if (g !== undefined) meta.games = g;
+        if (lb !== undefined) meta.lastBoutAt = lb;
         // devjee-ээс шууд авсан, архиваас шинэ рейтингийг дарахгүй; бусдыг архиваар тавина
         const keep = cur && cur.source === 'devjee' && cur.asOf >= this.latestDate;
         if (!keep && (!cur || Math.abs(cur.rating - r) > 0.5)) {
-          engine.setRating(id, r, 'devjee', this.latestDate);
+          engine.setRating(id, r, 'devjee', this.latestDate, meta);
           res.rated += 1;
+        } else if (cur && cur.games === undefined && meta.games !== undefined) {
+          // Рейтинг хэвээр — зөвхөн туршлага/огноог нөхнө (таамгийн калибровкид)
+          engine.setRating(id, cur.rating, cur.source, cur.asOf, meta);
+          res.updated += 1;
         }
       }
     }
@@ -150,7 +165,14 @@ export class Analytics {
         pathsBA: chain.topPathsBA.map((p) => ({ names: p.nodes.map((n) => this.name(n)), dates: p.dates, prob: p.prob })),
       },
       bt: pBt !== undefined ? { pA: pBt, eloA: Math.round(this.graph.btElo(a)!), eloB: Math.round(this.graph.btElo(b)!) } : null,
-      elo: ra !== undefined && rb !== undefined ? { pA: 1 / (1 + Math.pow(10, (rb - ra) / 400)), ratingA: Math.round(ra), ratingB: Math.round(rb) } : null,
+      elo:
+        ra !== undefined && rb !== undefined
+          ? {
+              pA: predictProbability({ rating: ra, games: recA.wins + recA.losses }, { rating: rb, games: recB.wins + recB.losses }),
+              ratingA: Math.round(ra),
+              ratingB: Math.round(rb),
+            }
+          : null,
     };
     return dto;
   }

@@ -4,6 +4,8 @@ import assert from 'node:assert/strict';
 import {
   DEFAULT_K,
   isTitle,
+  PREDICT_WEIGHTS,
+  predictProbability,
   seedRating,
   titleFromCode,
   titleInfo,
@@ -24,6 +26,27 @@ test('winProbability: тэнцүү = 0.5, монотон, тэгш хэм', () =
   assert.ok(winProbability(2200, 1500) > winProbability(2100, 1500));
   // devjee-ийн бодит жишээ: 2345 vs 2174 → 0.728
   close(winProbability(2345, 2174), 0.728, 0.001);
+});
+
+test('predictProbability: калибровкдсон таамаг — тэгш хэм, туршлага/амралтын нөлөө, дутуу мэдээлэл', () => {
+  // Тэнцүү талууд → 0.5; тэгш хэм
+  close(predictProbability({ rating: 1800 }, { rating: 1800 }), 0.5);
+  close(predictProbability({ rating: 2000, games: 50, daysSinceLast: 10 }, { rating: 1700, games: 8, daysSinceLast: 400 }) + predictProbability({ rating: 1700, games: 8, daysSinceLast: 400 }, { rating: 2000, games: 50, daysSinceLast: 10 }), 1);
+  // Зөвхөн рейтинг: z = DR·Δ/400
+  close(predictProbability({ rating: 2000 }, { rating: 1600 }), 1 / (1 + Math.exp(-PREDICT_WEIGHTS.dr)));
+  // Туршлага их нь давуу (ижил рейтингтэй)
+  assert.ok(predictProbability({ rating: 1800, games: 100 }, { rating: 1800, games: 5 }) > 0.5);
+  // Удаан завсарласан нь сул (ижил рейтинг, ижил туршлага)
+  assert.ok(predictProbability({ rating: 1800, games: 30, daysSinceLast: 700 }, { rating: 1800, games: 30, daysSinceLast: 7 }) < 0.5);
+  // Амралтын гишүүн 3 жилээс цааш өсөхгүй (cap)
+  close(
+    predictProbability({ rating: 1800, games: 30, daysSinceLast: 2000 }, { rating: 1800, games: 30, daysSinceLast: 7 }),
+    predictProbability({ rating: 1800, games: 30, daysSinceLast: 1095 }, { rating: 1800, games: 30, daysSinceLast: 7 }),
+  );
+  // Нэг талын мэдээлэл дутуу → тухайн гишүүн тооцогдохгүй (зөвхөн рейтинг)
+  close(predictProbability({ rating: 2000, games: 50 }, { rating: 1600 }), predictProbability({ rating: 2000 }, { rating: 1600 }));
+  // Калибровк 400-аас хурц биш — DR < ln10 (архивын хэмжилт), гэхдээ монотон
+  assert.ok(predictProbability({ rating: 2200 }, { rating: 1500 }) > predictProbability({ rating: 2100 }, { rating: 1500 }));
 });
 
 test('updateRatings: K=32, тэг нийлбэр, devjee-ийн бодит хостой тохирно', () => {

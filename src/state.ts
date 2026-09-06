@@ -121,7 +121,14 @@ export function apply(state: State, e: BukhEvent): void {
     }
     case 'rating_set': {
       need(state.wrestlers.get(e.wrestlerId), `бөх ${e.wrestlerId}`);
-      state.ratings.set(e.wrestlerId, { rating: e.rating, source: e.source, asOf: e.asOf });
+      const prev = state.ratings.get(e.wrestlerId);
+      const entry: RatingEntry = { rating: e.rating, source: e.source, asOf: e.asOf };
+      // games/lastBoutAt өгөгдөөгүй бол өмнөх утгыг хадгална (зөвхөн рейтинг шинэчлэх үйл явдал)
+      const games = e.games ?? prev?.games;
+      const lastBoutAt = e.lastBoutAt ?? prev?.lastBoutAt;
+      if (games !== undefined) entry.games = games;
+      if (lastBoutAt !== undefined) entry.lastBoutAt = lastBoutAt;
+      state.ratings.set(e.wrestlerId, entry);
       break;
     }
     case 'tournament_created': {
@@ -143,8 +150,10 @@ export function apply(state: State, e: BukhEvent): void {
     case 'bout_result': {
       const bout = need(state.bouts.get(e.boutId), `барилдаан ${e.boutId}`);
       bout.result = { winnerId: e.winnerId, recordedAt: e.at };
+      // Бодит барилдаан (гоц биш → ratingUpdates-тэй): туршлага +1, сүүлийн барилдааны огноо
       for (const u of e.ratingUpdates) {
-        state.ratings.set(u.wrestlerId, { rating: u.rating, source: u.source, asOf: u.asOf });
+        const prev = state.ratings.get(u.wrestlerId);
+        state.ratings.set(u.wrestlerId, { rating: u.rating, source: u.source, asOf: u.asOf, games: (prev?.games ?? 0) + 1, lastBoutAt: e.at });
       }
       break;
     }

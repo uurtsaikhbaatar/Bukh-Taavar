@@ -148,7 +148,7 @@ test('API: бүртгэл → баталгаажуулалт → админ тэ
     assert.equal(b.status, 200);
     const marketId = b.body.market.id;
     assert.ok(Math.abs(b.body.market.probs[0]! - b.body.bout.priorA) < 1e-9);
-    assert.deepEqual(b.body.market.modelProbs, b.body.market.probs);
+    for (let i = 0; i < 2; i++) assert.ok(Math.abs(b.body.market.modelProbs[i]! - b.body.market.probs[i]!) < 1e-9, 'загварын магадлал = анхны үнэ');
 
     // Нүүр: барилдааны зах зээл нүүрэнд биш — тэмцээний самбар дээр (хосоор)
     const home = await bat.get<HomeDto>('/api/home');

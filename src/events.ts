@@ -66,6 +66,10 @@ export interface RatingSet extends Base {
   rating: number;
   source: RatingSource;
   asOf: string;
+  /** Бодит барилдааны тоо (архивын гүйлтээс) — өгөхгүй бол өмнөх утга хадгалагдана. */
+  games?: number;
+  /** Сүүлд барилдсан огноо — өгөхгүй бол өмнөх утга хадгалагдана. */
+  lastBoutAt?: string;
 }
 
 export interface TournamentCreated extends Base {

@@ -39,7 +39,10 @@ export class ForecastService {
     const cached = this.cache.get(tournamentId);
     if (cached && cached.key === key && Date.now() - cached.at < 5 * 60_000) return cached.f;
     const f = forecastTournament({
-      entrants: entrantIds.map((id) => ({ id, rating: this.engine.rating(id).rating })),
+      entrants: entrantIds.map((id) => {
+        const s = this.engine.predictSide(id);
+        return { id, rating: s.rating, ...(s.games !== undefined ? { games: s.games } : {}), ...(s.daysSinceLast !== undefined ? { daysSinceLast: s.daysSinceLast } : {}) };
+      }),
       rounds: t.rounds,
       known,
       sims: SIMS,
