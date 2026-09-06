@@ -1,6 +1,6 @@
 import { StatusBar } from 'expo-status-bar';
 import React, { useCallback, useEffect, useState } from 'react';
-import { Platform, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import { Image, Platform, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
 
 import { api, ApiError, loadToken, saveToken, subscribe } from './src/api';
 import { Loading } from './src/components/ui';
@@ -144,7 +144,10 @@ export default function App() {
     <SafeAreaView style={s.root}>
       <StatusBar style="light" />
       <View style={s.header}>
-        <Text style={s.brand}>🤼 Бөхийн таавар</Text>
+        <View style={s.brandRow}>
+          <Image source={require('./assets/chogsom-bukh.jpg')} style={s.brandLogo} resizeMode="cover" accessibilityLabel="Б.Чогсом, «Бөх», 1972" />
+          <Text style={s.brand}>Бөхийн таавар</Text>
+        </View>
         <Text style={s.balance}>{fmtTokens(me.balance)} ₮оken</Text>
       </View>
       {!online ? <Text style={s.offline}>Сервертэй холбогдож чадахгүй байна…</Text> : null}
@@ -182,6 +185,8 @@ const s = StyleSheet.create({
   center: { flex: 1, backgroundColor: theme.bg, alignItems: 'center', justifyContent: 'center' },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 10, backgroundColor: theme.surface, borderBottomWidth: 1, borderBottomColor: theme.border },
   brand: { color: theme.text, fontSize: 17, fontWeight: '800' },
+  brandRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1 },
+  brandLogo: { height: 26, width: 74, borderRadius: 6, borderWidth: 1, borderColor: theme.border },
   balance: { color: theme.accent, fontSize: 16, fontWeight: '800' },
   offline: { color: theme.danger, textAlign: 'center', padding: 4, backgroundColor: theme.surface },
   content: { flex: 1, maxWidth: 720, width: '100%', alignSelf: 'center' },

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { api, ApiError, saveToken } from '../api';
 import { Button, Card, Field, H1, Msg, P } from '../components/ui';
@@ -56,9 +56,10 @@ export function AuthScreen({ onAuthed }: { onAuthed: (me: MeDto) => void }) {
   return (
     <ScrollView contentContainerStyle={s.wrap} keyboardShouldPersistTaps="handled">
       <View style={s.brand}>
-        <Text style={s.logo}>🤼</Text>
+        <Image source={require('../../assets/chogsom-bukh.jpg')} style={s.logo} resizeMode="cover" accessibilityLabel="Б.Чогсом, «Бөх», 1972" />
         <H1>Бөхийн таавар</H1>
         <P muted>Найз нөхдийн хүрээний виртуал токены таамаглалын зах зээл</P>
+        <Text style={s.credit}>Б.Чогсом, «Бөх», зотон тос, 1972</Text>
       </View>
 
       <Card style={{ gap: 12 }}>
@@ -118,7 +119,8 @@ export function AuthScreen({ onAuthed }: { onAuthed: (me: MeDto) => void }) {
 const s = StyleSheet.create({
   wrap: { padding: 20, gap: 20, maxWidth: 480, width: '100%', alignSelf: 'center', flexGrow: 1, justifyContent: 'center' },
   brand: { alignItems: 'center', gap: 6 },
-  logo: { fontSize: 44 },
+  logo: { width: 340, height: 100, borderRadius: 10, borderWidth: 1, borderColor: theme.border },
+  credit: { color: theme.muted, fontSize: 11, marginTop: -2 },
   tabs: { flexDirection: 'row', backgroundColor: theme.raised, borderRadius: 10, padding: 4 },
   tab: { flex: 1, textAlign: 'center', paddingVertical: 8, color: theme.muted, fontWeight: '700', borderRadius: 8 },
   tabActive: { backgroundColor: theme.surface, color: theme.text },
