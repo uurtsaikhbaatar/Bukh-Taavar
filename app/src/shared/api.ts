@@ -465,6 +465,43 @@ export interface WrestlerBoutsDto {
   rows: WrestlerBoutRowDto[];
 }
 
+/** Архивын (өмнөх бүх) тэмцээнүүдийн жагсаалт. */
+export interface ArchiveTournamentRowDto {
+  id: string;
+  name: string;
+  date: string;
+  place?: string;
+  rounds: number;
+  wrestlerCount: number;
+  matchCount: number;
+  /** Аппд импортлогдсон бол тэр тэмцээний id (самбар руу нь очиж болно). */
+  appTournamentId?: string;
+}
+
+export interface ArchiveTournamentsDto {
+  total: number;
+  offset: number;
+  rows: ArchiveTournamentRowDto[];
+}
+
+export interface ArchiveBoutRowDto {
+  round: number;
+  w1Id: string;
+  w1Name: string;
+  w1TitleLabel: string;
+  w2Id: string;
+  w2Name: string;
+  w2TitleLabel: string;
+  /** 1 = w1 давсан, 2 = w2 давсан. */
+  winner: 1 | 2;
+  noShow?: boolean;
+}
+
+export interface ArchiveTournamentDetailDto {
+  tournament: ArchiveTournamentRowDto;
+  bouts: ArchiveBoutRowDto[];
+}
+
 export type SseMessage =
   | { type: 'hello'; at: string }
   | { type: 'changed'; marketIds?: string[]; userIds?: string[]; at: string };

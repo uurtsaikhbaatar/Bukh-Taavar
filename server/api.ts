@@ -16,6 +16,9 @@ import { randomUUID } from 'node:crypto';
 import type {
   AccountDto,
   AdminUserDto,
+  ArchiveTournamentDetailDto,
+  ArchiveTournamentRowDto,
+  ArchiveTournamentsDto,
   BatchBuyResultDto,
   BoardBoutDto,
   BoardDto,
@@ -847,6 +850,48 @@ export function createRouter(deps: ApiDeps): Router {
     }
     list.sort((a, b) => engine.rating(b.id).rating - engine.rating(a.id).rating);
     return { wrestlers: list.slice(0, limit).map(wrestlerDto), total: list.length };
+  });
+
+  /** Өмнөх бүх тэмцээнүүд (архив) — он/нэрээр шүүж, хуудаслана. */
+  router.get('/api/archive/tournaments', async (ctx): Promise<ArchiveTournamentsDto> => {
+    await requireUser(ctx);
+    if (!deps.analytics) throw new HttpError(503, 'Архив ачаалагдаагүй (npm run archive).', 'NO_ARCHIVE');
+    const r = deps.analytics.archiveTournaments({
+      q: ctx.query.get('q') ?? '',
+      year: ctx.query.get('year') ?? '',
+      offset: Math.max(0, Number(ctx.query.get('offset') ?? 0) || 0),
+      limit: Math.min(100, Math.max(1, Number(ctx.query.get('limit') ?? 30) || 30)),
+    });
+    const byDevjee = new Map(engine.tournaments().filter((t) => t.devjeeId).map((t) => [t.devjeeId!, t.id]));
+    return {
+      total: r.total,
+      offset: r.offset,
+      rows: r.rows.map((x) => ({ ...x, ...(byDevjee.has(x.id) ? { appTournamentId: byDevjee.get(x.id)! } : {}) })),
+    };
+  });
+
+  /** Нэг архив тэмцээний бүх барилдаан (даваагаар). */
+  router.get('/api/archive/tournaments/:tid', async (ctx): Promise<ArchiveTournamentDetailDto> => {
+    await requireUser(ctx);
+    if (!deps.analytics) throw new HttpError(503, 'Архив ачаалагдаагүй (npm run archive).', 'NO_ARCHIVE');
+    const meta = deps.analytics.archive.tournaments.get(ctx.params.tid!);
+    if (!meta) throw new HttpError(404, 'Тэмцээн олдсонгүй.', 'NOT_FOUND');
+    const t: ArchiveTournamentRowDto = { id: meta.id, name: meta.name, date: meta.date, rounds: meta.rounds, wrestlerCount: meta.wrestlerCount, matchCount: meta.matchCount };
+    if (meta.place) t.place = meta.place;
+    return {
+      tournament: t,
+      bouts: deps.analytics.archiveTournamentBouts(meta.id).map((b) => ({
+        round: b.round,
+        w1Id: b.w1Id,
+        w1Name: b.w1Name,
+        w1TitleLabel: titleLabel(b.w1Title),
+        w2Id: b.w2Id,
+        w2Name: b.w2Name,
+        w2TitleLabel: titleLabel(b.w2Title),
+        winner: b.winner,
+        ...(b.noShow ? { noShow: true } : {}),
+      })),
+    };
   });
 
   /** Бөхийн дэлгэрэнгүй + архивын давалт–алдагдал. */

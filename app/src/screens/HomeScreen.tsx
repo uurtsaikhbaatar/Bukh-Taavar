@@ -58,7 +58,7 @@ function TournamentCard({ t, onOpenBoard }: { t: TournamentDto; onOpenBoard: (id
   const line = t.finished
     ? `Дууссан · аварга: ${t.championName ?? '?'}`
     : t.currentRound
-      ? `${t.currentRound}-р даваа явж байна · ${t.currentTotal} барилдаан · ${t.currentPending} хүлээгдэж буй${t.openMarkets ? ` · ${t.openMarkets} нээлттэй зах зээл` : ''}`
+      ? `${t.currentRound}-р даваа явж байна · ${t.currentTotal} барилдаан · ${t.currentPending} хүлээгдэж буй${t.openMarkets ? ` · ${t.openMarkets} нээлттэй таавар` : ''}`
       : t.entrants
         ? `Эхлээгүй · ${t.entrants} бөх бүртгэлтэй`
         : 'Барилдаан алга';
@@ -86,7 +86,7 @@ function TournamentCard({ t, onOpenBoard }: { t: TournamentDto; onOpenBoard: (id
   );
 }
 
-export function HomeScreen({ refreshKey, onOpenMarket, onOpenBoard }: { refreshKey: number; onOpenMarket: (id: string) => void; onOpenBoard: (id: string) => void }) {
+export function HomeScreen({ refreshKey, onOpenMarket, onOpenBoard, onOpenArchive }: { refreshKey: number; onOpenMarket: (id: string) => void; onOpenBoard: (id: string) => void; onOpenArchive: () => void }) {
   const [data, setData] = useState<HomeDto | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -142,7 +142,7 @@ export function HomeScreen({ refreshKey, onOpenMarket, onOpenBoard }: { refreshK
           <P muted>Одоогоор тэмцээн алга. Админ тэмцээн үүсгэхэд энд гарч ирнэ.</P>
         </Card>
       )}
-      {open.length ? <H2>Бусад зах зээл (хэд давах · хэн холдох · аварга)</H2> : null}
+      {open.length ? <H2>Бусад таавар (хэд давах · хэн холдох · аварга)</H2> : null}
       {[...byTournament.entries()].map(([name, list]) => (
         <View key={name} style={{ gap: 10 }}>
           <P muted small>{name}</P>
@@ -161,6 +161,11 @@ export function HomeScreen({ refreshKey, onOpenMarket, onOpenBoard }: { refreshK
           ))}
         </View>
       ) : null}
+      <Card style={{ gap: 6 }}>
+        <H2>Өмнөх тэмцээнүүд — бүх түүх</H2>
+        <P muted small>1900 оноос хойших бүх тэмцээний барилдаан бүрийн үр дүн (devjee архив).</P>
+        <Button title="📜 Өмнөх бүх барилдааныг үзэх" variant="secondary" onPress={onOpenArchive} />
+      </Card>
     </ScrollView>
   );
 }

@@ -131,17 +131,65 @@ export class Analytics {
 
   /** wid → архивын барилдаануудын индексүүд (нэг удаа байгуулагдана). */
   private boutIndex: Map<string, number[]> | undefined;
+  /** tid → архивын барилдаануудын индексүүд. */
+  private tidIndex: Map<string, number[]> | undefined;
 
   private ensureBoutIndex(): Map<string, number[]> {
     if (this.boutIndex) return this.boutIndex;
     const idx = new Map<string, number[]>();
+    const tidx = new Map<string, number[]>();
     this.archive.bouts.forEach((b, i) => {
       if (b.winner !== 1 && b.winner !== 2) return;
       (idx.get(b.w1) ?? idx.set(b.w1, []).get(b.w1)!).push(i);
       (idx.get(b.w2) ?? idx.set(b.w2, []).get(b.w2)!).push(i);
+      (tidx.get(b.tid) ?? tidx.set(b.tid, []).get(b.tid)!).push(i);
     });
     this.boutIndex = idx;
+    this.tidIndex = tidx;
     return idx;
+  }
+
+  /** Архивын тэмцээнүүд — шинэ нь эхэндээ; нэр/оноор шүүнэ. */
+  archiveTournaments(options: { q?: string; year?: string; offset?: number; limit?: number } = {}): { total: number; offset: number; rows: { id: string; name: string; date: string; place?: string; rounds: number; wrestlerCount: number; matchCount: number }[] } {
+    const q = (options.q ?? '').trim().toLowerCase();
+    const year = (options.year ?? '').trim();
+    const offset = Math.max(0, options.offset ?? 0);
+    const limit = Math.min(100, Math.max(1, options.limit ?? 30));
+    let list = [...this.archive.tournaments.values()];
+    if (year) list = list.filter((t) => t.date.startsWith(year));
+    if (q) list = list.filter((t) => t.name.toLowerCase().includes(q) || (t.place ?? '').toLowerCase().includes(q));
+    list.sort((a, b) => b.date.localeCompare(a.date));
+    const rows = list.slice(offset, offset + limit).map((t) => {
+      const row: ReturnType<Analytics['archiveTournaments']>['rows'][number] = { id: t.id, name: t.name, date: t.date, rounds: t.rounds, wrestlerCount: t.wrestlerCount, matchCount: t.matchCount };
+      if (t.place) row.place = t.place;
+      return row;
+    });
+    return { total: list.length, offset, rows };
+  }
+
+  /** Нэг архив тэмцээний бүх барилдаан — даваагаар бүлэглэхэд бэлэн (даваа өсөхөөр). */
+  archiveTournamentBouts(tid: string): { round: number; w1Id: string; w1Name: string; w1Title: import('../src/rating.ts').Title; w2Id: string; w2Name: string; w2Title: import('../src/rating.ts').Title; winner: 1 | 2; noShow?: boolean }[] {
+    this.ensureBoutIndex();
+    const indices = this.tidIndex!.get(tid) ?? [];
+    return indices
+      .map((i) => this.archive.bouts[i]!)
+      .sort((a, b) => a.round - b.round)
+      .map((b) => {
+        const w1 = this.archive.wrestlers[b.w1];
+        const w2 = this.archive.wrestlers[b.w2];
+        const row: ReturnType<Analytics['archiveTournamentBouts']>[number] = {
+          round: b.round,
+          w1Id: b.w1,
+          w1Name: w1?.name ?? b.w1,
+          w1Title: w1?.title ?? 'цолгүй',
+          w2Id: b.w2,
+          w2Name: w2?.name ?? b.w2,
+          w2Title: w2?.title ?? 'цолгүй',
+          winner: b.winner,
+        };
+        if (b.noShow) row.noShow = true;
+        return row;
+      });
   }
 
   /** Бөхийн архивын нийт давалт–алдагдал. */

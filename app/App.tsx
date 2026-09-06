@@ -6,6 +6,7 @@ import { api, ApiError, loadToken, saveToken, subscribe } from './src/api';
 import { Loading } from './src/components/ui';
 import { fmtTokens } from './src/format';
 import { AdminScreen } from './src/screens/AdminScreen';
+import { ArchiveScreen } from './src/screens/ArchiveScreen';
 import { AuthScreen } from './src/screens/AuthScreen';
 import { BoardScreen } from './src/screens/BoardScreen';
 import { CouponScreen, type SlipItem } from './src/screens/CouponScreen';
@@ -26,6 +27,7 @@ export default function App() {
   const [marketId, setMarketId] = useState<string | null>(null);
   /** Нээлттэй бооцооны самбар (тэмцээний id) — зах зээлээс буцахад энд ирнэ. */
   const [boardId, setBoardId] = useState<string | null>(null);
+  const [showArchive, setShowArchive] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [online, setOnline] = useState(true);
   const [slip, setSlip] = useState<SlipItem[]>([]);
@@ -112,6 +114,8 @@ export default function App() {
       onBack={() => setMarketId(null)}
       onTraded={(balance) => setMe((m) => (m ? { ...m, balance } : m))}
     />
+  ) : showArchive ? (
+    <ArchiveScreen onBack={() => setShowArchive(false)} onOpenBoard={(id) => { setShowArchive(false); setBoardId(id); }} />
   ) : boardId ? (
     <BoardScreen
       tournamentId={boardId}
@@ -122,7 +126,7 @@ export default function App() {
       onTraded={(balance) => setMe((m) => (m ? { ...m, balance } : m))}
     />
   ) : tab === 'home' ? (
-    <HomeScreen refreshKey={refreshKey} onOpenMarket={openMarket} onOpenBoard={(id) => setBoardId(id)} />
+    <HomeScreen refreshKey={refreshKey} onOpenMarket={openMarket} onOpenBoard={(id) => setBoardId(id)} onOpenArchive={() => setShowArchive(true)} />
   ) : tab === 'toto' ? (
     <TotoScreen me={me} refreshKey={refreshKey} onTraded={(balance) => setMe((m) => (m ? { ...m, balance } : m))} />
   ) : tab === 'wrestlers' ? (
@@ -136,7 +140,7 @@ export default function App() {
   );
 
   const tabs: [Tab, string][] = [
-    ['home', '🏟 Зах зээл'],
+    ['home', '🥋 Барилдаанууд'],
     ['toto', '🎟 Багц таавар'],
     ['wrestlers', '🤼 Бөхчүүд'],
     ['portfolio', '👤 Би'],
@@ -169,6 +173,7 @@ export default function App() {
             onPress={() => {
               setMarketId(null);
               setBoardId(null);
+              setShowArchive(false);
               setShowCoupon(false);
               setTab(k);
               setRefreshKey((x) => x + 1);
