@@ -1,0 +1,25 @@
+# Render Blueprint (bigtwo-ийн загвар). Repo-г Render-т холбоход энэ файлыг
+# уншиж үйлчилгээг тохируулна. Файл repo-гийн үндэс дээр байх ёстой.
+#
+# Орчны хувьсагчийг Render-ийн Dashboard дээр гараар оруулна (нууц):
+#   DATABASE_URL     — Neon Postgres холболтын мөр
+#   EMAIL_PROVIDER   — brevo
+#   EMAIL_API_KEY    — Brevo API key (xkeysib-…)
+#   EMAIL_FROM       — "Бөхийн таавар <noreply@…>"  (Brevo дээр баталгаажсан хаяг)
+#   SECURE_COOKIES   — 1
+#   DEVJEE_FIREBASE_KEY — (заавал биш) devjee-ийн нийтийн Firebase key; байхгүй бол өөрөө олно
+services:
+  - type: web
+    name: bukh-taavar
+    runtime: docker
+    plan: free            # найзууд идэвхтэй болмогц starter ($7/сар, унтардаггүй) болгоно
+    region: singapore
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SECURE_COOKIES
+        value: "1"

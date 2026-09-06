@@ -1,0 +1,424 @@
+{
+ "generatedAt": "2026-09-05T11:40:03.218Z",
+ "range": [
+  1900,
+  2026
+ ],
+ "tournaments": 1457,
+ "tournamentsWithState": 1457,
+ "bouts": 247142,
+ "wrestlers": 22360,
+ "byYear": {
+  "1925": {
+   "tournaments": 1,
+   "bouts": 39
+  },
+  "1926": {
+   "tournaments": 1,
+   "bouts": 39
+  },
+  "1927": {
+   "tournaments": 1,
+   "bouts": 1
+  },
+  "1928": {
+   "tournaments": 1,
+   "bouts": 3
+  },
+  "1929": {
+   "tournaments": 1,
+   "bouts": 3
+  },
+  "1930": {
+   "tournaments": 1,
+   "bouts": 3
+  },
+  "1931": {
+   "tournaments": 1,
+   "bouts": 1
+  },
+  "1932": {
+   "tournaments": 1,
+   "bouts": 1
+  },
+  "1933": {
+   "tournaments": 1,
+   "bouts": 54
+  },
+  "1934": {
+   "tournaments": 1,
+   "bouts": 15
+  },
+  "1935": {
+   "tournaments": 1,
+   "bouts": 11
+  },
+  "1936": {
+   "tournaments": 1,
+   "bouts": 23
+  },
+  "1937": {
+   "tournaments": 1,
+   "bouts": 13
+  },
+  "1938": {
+   "tournaments": 1,
+   "bouts": 12
+  },
+  "1939": {
+   "tournaments": 1,
+   "bouts": 7
+  },
+  "1940": {
+   "tournaments": 1,
+   "bouts": 15
+  },
+  "1941": {
+   "tournaments": 1,
+   "bouts": 6
+  },
+  "1942": {
+   "tournaments": 1,
+   "bouts": 5
+  },
+  "1943": {
+   "tournaments": 1,
+   "bouts": 31
+  },
+  "1944": {
+   "tournaments": 1,
+   "bouts": 31
+  },
+  "1945": {
+   "tournaments": 1,
+   "bouts": 31
+  },
+  "1946": {
+   "tournaments": 1,
+   "bouts": 63
+  },
+  "1947": {
+   "tournaments": 1,
+   "bouts": 31
+  },
+  "1948": {
+   "tournaments": 1,
+   "bouts": 31
+  },
+  "1949": {
+   "tournaments": 1,
+   "bouts": 31
+  },
+  "1950": {
+   "tournaments": 1,
+   "bouts": 31
+  },
+  "1951": {
+   "tournaments": 1,
+   "bouts": 63
+  },
+  "1952": {
+   "tournaments": 1,
+   "bouts": 31
+  },
+  "1953": {
+   "tournaments": 1,
+   "bouts": 31
+  },
+  "1954": {
+   "tournaments": 1,
+   "bouts": 31
+  },
+  "1955": {
+   "tournaments": 1,
+   "bouts": 31
+  },
+  "1956": {
+   "tournaments": 1,
+   "bouts": 31
+  },
+  "1957": {
+   "tournaments": 1,
+   "bouts": 31
+  },
+  "1958": {
+   "tournaments": 1,
+   "bouts": 31
+  },
+  "1959": {
+   "tournaments": 1,
+   "bouts": 31
+  },
+  "1960": {
+   "tournaments": 1,
+   "bouts": 31
+  },
+  "1961": {
+   "tournaments": 1,
+   "bouts": 31
+  },
+  "1962": {
+   "tournaments": 1,
+   "bouts": 31
+  },
+  "1963": {
+   "tournaments": 2,
+   "bouts": 34
+  },
+  "1964": {
+   "tournaments": 2,
+   "bouts": 34
+  },
+  "1965": {
+   "tournaments": 2,
+   "bouts": 34
+  },
+  "1966": {
+   "tournaments": 2,
+   "bouts": 34
+  },
+  "1967": {
+   "tournaments": 2,
+   "bouts": 34
+  },
+  "1968": {
+   "tournaments": 2,
+   "bouts": 34
+  },
+  "1969": {
+   "tournaments": 2,
+   "bouts": 32
+  },
+  "1970": {
+   "tournaments": 2,
+   "bouts": 38
+  },
+  "1971": {
+   "tournaments": 2,
+   "bouts": 38
+  },
+  "1972": {
+   "tournaments": 2,
+   "bouts": 38
+  },
+  "1973": {
+   "tournaments": 2,
+   "bouts": 37
+  },
+  "1974": {
+   "tournaments": 2,
+   "bouts": 38
+  },
+  "1975": {
+   "tournaments": 2,
+   "bouts": 38
+  },
+  "1976": {
+   "tournaments": 2,
+   "bouts": 33
+  },
+  "1977": {
+   "tournaments": 2,
+   "bouts": 34
+  },
+  "1978": {
+   "tournaments": 2,
+   "bouts": 34
+  },
+  "1979": {
+   "tournaments": 2,
+   "bouts": 34
+  },
+  "1980": {
+   "tournaments": 2,
+   "bouts": 34
+  },
+  "1981": {
+   "tournaments": 2,
+   "bouts": 34
+  },
+  "1982": {
+   "tournaments": 2,
+   "bouts": 34
+  },
+  "1983": {
+   "tournaments": 2,
+   "bouts": 34
+  },
+  "1984": {
+   "tournaments": 2,
+   "bouts": 34
+  },
+  "1985": {
+   "tournaments": 2,
+   "bouts": 34
+  },
+  "1986": {
+   "tournaments": 2,
+   "bouts": 34
+  },
+  "1987": {
+   "tournaments": 2,
+   "bouts": 34
+  },
+  "1988": {
+   "tournaments": 2,
+   "bouts": 34
+  },
+  "1989": {
+   "tournaments": 2,
+   "bouts": 66
+  },
+  "1990": {
+   "tournaments": 2,
+   "bouts": 34
+  },
+  "1991": {
+   "tournaments": 2,
+   "bouts": 514
+  },
+  "1992": {
+   "tournaments": 3,
+   "bouts": 513
+  },
+  "1993": {
+   "tournaments": 3,
+   "bouts": 515
+  },
+  "1994": {
+   "tournaments": 3,
+   "bouts": 771
+  },
+  "1995": {
+   "tournaments": 3,
+   "bouts": 511
+  },
+  "1996": {
+   "tournaments": 3,
+   "bouts": 515
+  },
+  "1997": {
+   "tournaments": 3,
+   "bouts": 515
+  },
+  "1998": {
+   "tournaments": 3,
+   "bouts": 767
+  },
+  "1999": {
+   "tournaments": 3,
+   "bouts": 766
+  },
+  "2000": {
+   "tournaments": 3,
+   "bouts": 766
+  },
+  "2001": {
+   "tournaments": 23,
+   "bouts": 3128
+  },
+  "2002": {
+   "tournaments": 27,
+   "bouts": 3778
+  },
+  "2003": {
+   "tournaments": 35,
+   "bouts": 3262
+  },
+  "2004": {
+   "tournaments": 34,
+   "bouts": 3530
+  },
+  "2005": {
+   "tournaments": 36,
+   "bouts": 4559
+  },
+  "2006": {
+   "tournaments": 35,
+   "bouts": 5190
+  },
+  "2007": {
+   "tournaments": 40,
+   "bouts": 5511
+  },
+  "2008": {
+   "tournaments": 44,
+   "bouts": 6728
+  },
+  "2009": {
+   "tournaments": 35,
+   "bouts": 5393
+  },
+  "2010": {
+   "tournaments": 46,
+   "bouts": 7003
+  },
+  "2011": {
+   "tournaments": 47,
+   "bouts": 8582
+  },
+  "2012": {
+   "tournaments": 45,
+   "bouts": 9178
+  },
+  "2013": {
+   "tournaments": 43,
+   "bouts": 9016
+  },
+  "2014": {
+   "tournaments": 45,
+   "bouts": 9973
+  },
+  "2015": {
+   "tournaments": 49,
+   "bouts": 11075
+  },
+  "2016": {
+   "tournaments": 49,
+   "bouts": 10841
+  },
+  "2017": {
+   "tournaments": 51,
+   "bouts": 10725
+  },
+  "2018": {
+   "tournaments": 30,
+   "bouts": 7208
+  },
+  "2019": {
+   "tournaments": 41,
+   "bouts": 11483
+  },
+  "2020": {
+   "tournaments": 30,
+   "bouts": 5510
+  },
+  "2021": {
+   "tournaments": 34,
+   "bouts": 6179
+  },
+  "2022": {
+   "tournaments": 99,
+   "bouts": 20011
+  },
+  "2023": {
+   "tournaments": 136,
+   "bouts": 20580
+  },
+  "2024": {
+   "tournaments": 111,
+   "bouts": 17958
+  },
+  "2025": {
+   "tournaments": 89,
+   "bouts": 17349
+  },
+  "2026": {
+   "tournaments": 80,
+   "bouts": 15300
+  }
+ },
+ "network": 1462,
+ "cached": 129,
+ "minutes": 7
+}

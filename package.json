@@ -1,0 +1,40 @@
+{
+  "name": "bukh-taavar",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Монгол бөхийн таавар — найз нөхдийн хүрээний виртуал токены таамаглалын зах зээл (Phase 1: цөм + тест)",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --test \"src/**/*.test.ts\" \"server/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit",
+    "demo": "node scripts/demo.ts",
+    "sim": "node scripts/sim.ts",
+    "devjee": "node scripts/devjee-demo.ts",
+    "calibrate": "node scripts/calibrate.ts",
+    "archive": "node scripts/devjee-archive.ts",
+    "archive:pack": "node scripts/archive-pack.ts",
+    "archive:unpack": "node scripts/archive-pack.ts --unpack",
+    "mem": "node --expose-gc scripts/mem-check.ts",
+    "h2h": "node scripts/h2h.ts",
+    "eval": "node scripts/model-eval.ts",
+    "tune": "node scripts/chain-tune.ts",
+    "check": "npm run typecheck && npm test",
+    "web": "node --env-file-if-exists=.env server/index.ts",
+    "start": "node --env-file-if-exists=.env server/index.ts",
+    "admin": "node --env-file-if-exists=.env server/admin-cli.ts",
+    "build:web": "npm --prefix app run build:web",
+    "app": "npm --prefix app start",
+    "setup": "npm install && npm --prefix app install"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.21.0",
+    "typescript": "^5.9.0"
+  },
+  "dependencies": {
+    "pg": "^8.23.0"
+  }
+}

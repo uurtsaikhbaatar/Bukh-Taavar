@@ -1,0 +1,14 @@
+{
+  "expo": {
+    "name": "Бөхийн таавар",
+    "slug": "bukh-taavar",
+    "version": "1.0.0",
+    "orientation": "default",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0b1a2e",
+    "web": {
+      "bundler": "metro",
+      "output": "single"
+    }
+  }
+}
