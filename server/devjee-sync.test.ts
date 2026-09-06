@@ -158,11 +158,14 @@ test('sync: шинэ барилдаан → зах зээл; winner → шийд
   assert.equal(engine.bout('dj-m3').result?.winnerId, 'wB');
   assert.ok(changedIds.length > 0);
   const status = sync.status(tournamentId);
-  assert.equal(status.enabled, true);
+  assert.equal(status.enabled, false, 'финал шийдэгдмэгц (аварга тодорсон) sync автоматаар унтарна');
+  assert.equal(engine.tournament(tournamentId).syncEnabled, false, 'унтарсан төлөв Engine-д (үйл явдал) хадгалагдана');
   assert.equal(status.bouts, 3);
   assert.equal(status.resolved, 3);
   assert.ok(status.lastSyncAt);
-  assert.equal(engine.tournament(tournamentId).syncEnabled, true, 'асаалттай төлөв Engine-д (үйл явдал) хадгалагдана');
+  // Гараар асаах/унтраах үйл явдлаар хадгалагдана
+  sync.setEnabled(tournamentId, true);
+  assert.equal(engine.tournament(tournamentId).syncEnabled, true);
   sync.setEnabled(tournamentId, false);
   assert.equal(engine.tournament(tournamentId).syncEnabled, false);
   assert.equal(sync.allStatuses().length, 1);

@@ -251,6 +251,11 @@ export class DevjeeSync {
       }
       st.lastSyncAt = new Date(this.now()).toISOString();
       delete st.lastError;
+      // Тэмцээн дууссан (аварга тодорсон) бол sync-ийг автоматаар унтраана — шинэ мэдээлэл ирэхгүй
+      if (st.enabled && this.engine.roundStatus(tournamentId).finished) {
+        this.setEnabled(tournamentId, false);
+        this.log(`${tournamentId}: тэмцээн дууссан — sync автоматаар унтрав`);
+      }
     } catch (err) {
       st.lastError = err instanceof Error ? err.message : String(err);
       throw err;
