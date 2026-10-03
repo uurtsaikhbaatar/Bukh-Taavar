@@ -12,7 +12,7 @@
  */
 
 import type { DevjeeHomeDto, DevjeeSyncStatusDto, DevjeeTournamentDto } from '../app/src/shared/api.ts';
-import { AIMAGS, TOURNAMENT_TYPES, toWrestler, type DevjeeClient, type DevjeeRating, type DevjeeStateMatch } from '../src/devjee.ts';
+import { AIMAGS, TOURNAMENT_TYPES, toWrestler, type DevjeeClient, type DevjeeRating, type DevjeeStateMatch, type DevjeeTournamentState } from '../src/devjee.ts';
 import type { Engine } from '../src/engine.ts';
 import { titleFromCode, titleInfo } from '../src/rating.ts';
 
@@ -179,16 +179,9 @@ export class DevjeeSync {
       }
     }
 
-    // Оролцогчид зэрэг дэвийн дарааллаар (прогнозд); дээд тал нь 2^rounds
-    const ordered = Object.values(state.wrestlers)
-      .sort((a, b) => a.order - b.order)
-      .map((w) => w.id)
-      .filter((id) => this.engine.state.wrestlers.has(id))
-      .slice(0, 2 ** rounds);
-    const prev = tournament.entrants ?? [];
-    if (ordered.length && (prev.length !== ordered.length || prev.some((id, i) => id !== ordered[i]))) {
-      this.engine.updateTournament(tournament.id, { entrants: ordered });
-    }
+    // Мета: даваа өссөн бол нэмж, оролцогчдыг шинэчилнэ
+    const grown = this.growRounds(tournament.id, state);
+    this.refreshEntrants(tournament.id, state, grown);
 
     // Рейтинг
     let fromTop = 0;
@@ -221,11 +214,45 @@ export class DevjeeSync {
     }
 
     if (!this.states.has(tournament.id)) this.states.set(tournament.id, { devjeeId: tid, enabled: false });
+    // Импортын дараа sync АВТОМАТААР асна (дууссан тэмцээнийг дахин импортлоход үгүй) —
+    // тэмцээний өдөр «Sync асаах» дарахаа мартсанаас даваанууд орж ирэхгүй байх явдлыг таслав.
+    if (!this.isEnabled(tournament.id) && !this.engine.roundStatus(tournament.id).finished) {
+      this.setEnabled(tournament.id, true);
+    }
     this.log(`импорт ${tid}: бөх +${added} (${existing} байсан), рейтинг топ ${fromTop}, түүхээс ${fromMatches}`);
     return { tournamentId: tournament.id, devjeeId: tid, created, wrestlersAdded: added, wrestlersExisting: existing, ratingsFromTop: fromTop, ratingsFromMatches: fromMatches };
   }
 
   // ── sync ──
+
+  /**
+   * Давааны тоог devjee төлөвөөс ӨСГӨЖ шинэчилнэ (хэзээ ч бууруулахгүй). Тэмцээнийг
+   * төлөв нь дутуу байхад (даваа зарлагдаагүй) импортолсон бол дараагийн sync-үүд засна.
+   */
+  private growRounds(tournamentId: string, state: DevjeeTournamentState): number {
+    const t = this.engine.tournament(tournamentId);
+    const fromState = Object.keys(state.rounds).length;
+    if (fromState > t.rounds) {
+      this.engine.updateTournament(tournamentId, { rounds: fromState });
+      this.log(`${tournamentId}: даваа ${t.rounds} → ${fromState}`);
+      return fromState;
+    }
+    return t.rounds;
+  }
+
+  /** Оролцогчдыг зэрэг дэвийн дарааллаар шинэчилнэ (зөвхөн бидэнд бүртгэлтэй бөх); дээд тал нь 2^rounds. */
+  private refreshEntrants(tournamentId: string, state: DevjeeTournamentState, rounds: number): void {
+    const t = this.engine.tournament(tournamentId);
+    const ordered = Object.values(state.wrestlers)
+      .sort((a, b) => a.order - b.order)
+      .map((w) => (this.engine.state.wrestlers.has(w.id) ? w.id : this.engine.wrestlerByDevjeeId(w.id)?.id))
+      .filter((id): id is string => !!id)
+      .slice(0, 2 ** Math.min(rounds, 14));
+    const prev = t.entrants ?? [];
+    if (ordered.length && (prev.length !== ordered.length || prev.some((id, i) => id !== ordered[i]))) {
+      this.engine.updateTournament(tournamentId, { entrants: ordered });
+    }
+  }
 
   private async ensureWrestler(wid: string): Promise<string> {
     if (this.engine.state.wrestlers.has(wid)) return wid;
@@ -245,16 +272,30 @@ export class DevjeeSync {
     const result: SyncResult = { tournamentId, newBouts: 0, resolved: 0, voided: 0, closed: 0, marketIds: [], skipped: 0 };
     try {
       const { state } = await this.client.tournamentState(t.devjeeId, 20_000);
+      // Мета эхэлж өснө — дутуу үед нь импортолсон тэмцээний даваа нэмэгдэж, дараагийн
+      // давааны барилдаанууд орж ирнэ (өмнө нь round > rounds гэж алгасдаг байсан).
+      const rounds = this.growRounds(tournamentId, state);
       const entries = Object.entries(state.matches).sort(([, a], [, b]) => a.round - b.round);
       for (const [mid, m] of entries) {
-        await this.applyMatch(t.id, t.rounds, mid, m, result);
+        await this.applyMatch(t.id, rounds, mid, m, result);
       }
+      this.refreshEntrants(tournamentId, state, rounds);
       st.lastSyncAt = new Date(this.now()).toISOString();
       delete st.lastError;
-      // Тэмцээн дууссан (аварга тодорсон) бол sync-ийг автоматаар унтраана — шинэ мэдээлэл ирэхгүй
+      // Авто-унтраалт зөвхөн ЖИНХЭНЭ төгсгөлд: хүрээн доторх бүх барилдаан шийдэгдсэн БА
+      // финал (1 барилдаантай сүүлийн даваа) шийдэгдсэн үед. Эс бөгөөс дутуу төлөвийг
+      // (жишээ нь зөвхөн 1-р даваа нь орж ирсэн) «дууссан» гэж андуурч унтардаг байсан.
       if (st.enabled && this.engine.roundStatus(tournamentId).finished) {
-        this.setEnabled(tournamentId, false);
-        this.log(`${tournamentId}: тэмцээн дууссан — sync автоматаар унтрав`);
+        const valid = Object.values(state.matches).filter((m) => m.w1 && m.w2 && m.w1 !== m.w2 && m.round >= 1 && m.round <= rounds);
+        const allResolved = valid.length > 0 && valid.every((m) => m.winner === 1 || m.winner === 2);
+        const maxRound = valid.reduce((mx, m) => Math.max(mx, m.round), 0);
+        const finalSeen = valid.filter((m) => m.round === maxRound).length === 1;
+        // Багийн г.м финалгүй форматад: тэмцээний өдрөөс 48 цаг өнгөрсөн бол мөн унтраана
+        const stale = this.now() - Date.parse(`${state.date || t.date}T23:59:59+08:00`) > 48 * 3_600_000;
+        if (allResolved && (finalSeen || stale)) {
+          this.setEnabled(tournamentId, false);
+          this.log(`${tournamentId}: тэмцээн дууссан — sync автоматаар унтрав`);
+        }
       }
     } catch (err) {
       st.lastError = err instanceof Error ? err.message : String(err);

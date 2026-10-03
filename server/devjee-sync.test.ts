@@ -89,6 +89,8 @@ test('импорт: тэмцээн, бөхчүүд (id = wid), рейтинг т
   assert.equal(r2.wrestlersExisting, 4);
   assert.equal(calls.current, 1, 'түүхээс хайлт давтагдахгүй (devjee эх сурвалжтай)');
   assert.equal(engine.wrestlers().length, 4);
+  assert.ok(sync.isEnabled(r.tournamentId), 'импортын дараа sync автоматаар асна');
+  sync.stop();
 });
 
 test('sync: шинэ барилдаан → зах зээл; winner → шийдэх; noShow → хүчингүй; давтан sync идемпотент', async () => {
@@ -99,6 +101,8 @@ test('sync: шинэ барилдаан → зах зээл; winner → шийд
   const changedIds: string[] = [];
   const sync = new DevjeeSync({ client: api, engine, log: () => undefined, onSynced: (r) => void changedIds.push(...r.marketIds), intervalMs: 5 });
   const { tournamentId } = await sync.importTournament('T1', { withRatings: true });
+  assert.ok(sync.isEnabled(tournamentId), 'импортын дараа sync автоматаар асна');
+  sync.setEnabled(tournamentId, false); // цаашхи алхмуудыг гараар, детерминистик шалгана
 
   // 1-р даваа: 2 барилдаан, үр дүнгүй
   state.matches.m1 = { round: 1, w1: 'wA', w2: 'wD', winner: 0, kind: 'o' } as DevjeeStateMatch;
@@ -182,4 +186,37 @@ test('sync: шинэ барилдаан → зах зээл; winner → шийд
   // devjee-гүй тэмцээнд sync хийхгүй
   engine.createTournament({ id: 'manual', name: 'Гараар', date: '2026-08-21', rounds: 3 });
   await assert.rejects(sync.syncOnce('manual'), /devjee-тэй холбоогүй/);
+});
+
+test('дутуу импорт өөрийгөө засна: даваа өсөж, оролцогч шинэчлэгдэж, дундуур авто-унтрахгүй', async () => {
+  // Тэмцээнийг devjee төлөв нь бараг хоосон байхад импортолжээ (2026-10-03-ны бодит алдаа)
+  const st = baseState();
+  st.wrestlers = { wA: { id: 'wA', order: 1 }, wB: { id: 'wB', order: 2 } };
+  st.rounds = { '1': { id: 1 } };
+  const { api, state } = fakeApi(st);
+  const engine = new Engine(new MemoryLog(), { idGen: (() => { let n = 0; return () => `i${++n}`; })(), defaultB: 1_000 });
+  const sync = new DevjeeSync({ client: api, engine, log: () => undefined });
+  const { tournamentId } = await sync.importTournament('T1');
+  assert.equal(engine.tournament(tournamentId).rounds, 1, 'дутуу төлөвөөс 1 даваа гэж үүснэ');
+  assert.ok(sync.isEnabled(tournamentId), 'шинэ тэмцээнд sync автоматаар асна');
+
+  // devjee төлөв бүрэн болов: 4 бөх, 2 даваа; 1-р даваа бүхэлдээ шийдэгдсэн
+  state.wrestlers = baseState().wrestlers;
+  state.rounds = { '1': { id: 1 }, '2': { id: 2 } };
+  state.matches.m1 = { round: 1, w1: 'wA', w2: 'wD', winner: 1 } as DevjeeStateMatch;
+  state.matches.m2 = { round: 1, w1: 'wB', w2: 'wC', winner: 1 } as DevjeeStateMatch;
+  let r = await sync.syncOnce(tournamentId);
+  assert.equal(engine.tournament(tournamentId).rounds, 2, 'даваа төлөвөөс өснө');
+  assert.equal(r.newBouts, 2);
+  assert.equal(engine.tournament(tournamentId).entrants?.length, 4, 'оролцогчид нөхөгдөнө');
+  assert.equal(engine.roundStatus(tournamentId).finished, false, '1-р даваа дууссан ч тэмцээн дуусаагүй');
+  assert.ok(sync.isEnabled(tournamentId), 'финал шийдэгдээгүй тул унтрахгүй');
+
+  // Финал (2-р даваа, 1 барилдаан) шийдэгдэв — одоо л жинхэнэ төгсгөл
+  state.matches.m3 = { round: 2, w1: 'wA', w2: 'wB', winner: 2 } as DevjeeStateMatch;
+  r = await sync.syncOnce(tournamentId);
+  assert.equal(r.newBouts, 1);
+  assert.equal(engine.roundStatus(tournamentId).championId, 'wB');
+  assert.equal(sync.isEnabled(tournamentId), false, 'финал шийдэгдмэгц sync унтарна');
+  sync.stop();
 });
