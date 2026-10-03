@@ -74,6 +74,8 @@ export interface RatingEntry {
   games?: number;
   /** Сүүлд барилдсан огноо (таамгийн «амралтын» гишүүнд). */
   lastBoutAt?: string;
+  /** Таамгийн (хурдан, K=64) рейтинг — зөвхөн таамагт; дэлгэцэнд `rating`. */
+  fast?: number;
 }
 
 export interface Tournament {

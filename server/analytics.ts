@@ -9,7 +9,7 @@ import path from 'node:path';
 import type { H2hDto } from '../app/src/shared/api.ts';
 import type { Engine } from '../src/engine.ts';
 import { BoutGraph, eloReplay, loadArchive, type Archive } from '../src/graph.ts';
-import { predictProbability, titleLabel } from '../src/rating.ts';
+import { ageFromBirthDate, predictProbability, titleLabel, type PredictSide } from '../src/rating.ts';
 
 /**
  * Архивын Elo replay-ийн суурь: 1300 → devjee.mn-ийн рейтингтэй ±10 дотор таардаг
@@ -32,6 +32,8 @@ export class Analytics {
   readonly games: Map<string, number>;
   /** Архив дахь сүүлийн барилдааны огноо. */
   readonly lastBout: Map<string, string>;
+  /** Таамгийн (хурдан, K=64) рейтинг — архивын replay-ээс. */
+  readonly fast: Map<string, number>;
   readonly latestDate: string;
   readonly loadedAt = new Date().toISOString();
 
@@ -39,9 +41,49 @@ export class Analytics {
     this.archive = archive;
     this.graph = graph;
     this.elo = replay.ratings;
+    this.fast = replay.fast;
     this.games = replay.games;
     this.lastBout = replay.lastDate;
     this.latestDate = latestDate;
+  }
+
+  /**
+   * Таамгийн шинжүүдийг архиваас нөхнө — сервер эхлэх бүрд дуудагдана, идемпотент:
+   *  - хурдан рейтинг байхгүй бол архивын replay-ээс;
+   *  - туршлага (барилдааны тоо) архивынхаас бага бол архивынх хүртэл өсгөнө: рейтингийн
+   *    бичлэг нь туршлагагүй үүссэн бөхөд локал барилдаан 0-ээс тоологдож (Орхонбаяр 2,
+   *    Батмагнай 8) таамгийн туршлагын гишүүнийг эвдэж байв. max() тул давхар тоолохгүй;
+   *  - сүүлийн барилдааны огноо архивынхаас өмнө бол шинэчилнэ;
+   *  - рейтингийн бичлэггүй боловч архивт түүхтэй бөхөд бүтэн бичлэг тавина (эс бөгөөс
+   *    таамаг түүнийг анх удаа барилдаж буй гэж андуурна).
+   * Буцаах: бичсэн бөхийн тоо.
+   */
+  backfillPredictive(engine: Engine): number {
+    let n = 0;
+    for (const [wid, f] of this.fast) {
+      const w = engine.state.wrestlers.get(wid) ?? engine.wrestlerByDevjeeId(wid);
+      if (!w) continue;
+      const cur = engine.state.ratings.get(w.id);
+      const g = this.games.get(wid);
+      const lb = this.lastBout.get(wid);
+      if (!cur) {
+        const meta: { games?: number; lastBoutAt?: string; fast: number } = { fast: f };
+        if (g !== undefined) meta.games = g;
+        if (lb !== undefined) meta.lastBoutAt = lb;
+        engine.setRating(w.id, this.elo.get(wid) ?? f, 'devjee', this.latestDate, meta);
+        n += 1;
+        continue;
+      }
+      const fill: { games?: number; lastBoutAt?: string; fast?: number } = {};
+      if (cur.fast === undefined) fill.fast = f;
+      if (g !== undefined && (cur.games === undefined || cur.games < g)) fill.games = g;
+      if (lb !== undefined && (cur.lastBoutAt === undefined || cur.lastBoutAt < lb)) fill.lastBoutAt = lb;
+      if (Object.keys(fill).length) {
+        engine.setRating(w.id, cur.rating, cur.source, cur.asOf, fill);
+        n += 1;
+      }
+    }
+    return n;
   }
 
   static tryLoad(dir = path.join('data', 'devjee'), log: (m: string) => void = console.log): Analytics | undefined {
@@ -105,20 +147,28 @@ export class Analytics {
       const r = this.elo.get(wid);
       if (r !== undefined) {
         const cur = engine.state.ratings.get(id);
-        const meta: { games?: number; lastBoutAt?: string } = {};
+        const meta: { games?: number; lastBoutAt?: string; fast?: number } = {};
         const g = this.games.get(wid);
         const lb = this.lastBout.get(wid);
+        const fr = this.fast.get(wid);
         if (g !== undefined) meta.games = g;
         if (lb !== undefined) meta.lastBoutAt = lb;
+        if (fr !== undefined) meta.fast = fr;
         // devjee-ээс шууд авсан, архиваас шинэ рейтингийг дарахгүй; бусдыг архиваар тавина
         const keep = cur && cur.source === 'devjee' && cur.asOf >= this.latestDate;
         if (!keep && (!cur || Math.abs(cur.rating - r) > 0.5)) {
           engine.setRating(id, r, 'devjee', this.latestDate, meta);
           res.rated += 1;
-        } else if (cur && cur.games === undefined && meta.games !== undefined) {
-          // Рейтинг хэвээр — зөвхөн туршлага/огноог нөхнө (таамгийн калибровкид)
-          engine.setRating(id, cur.rating, cur.source, cur.asOf, meta);
-          res.updated += 1;
+        } else if (cur) {
+          // Рейтинг хэвээр — зөвхөн дутуу туршлага/огноо/хурдан рейтингийг нөхнө (таамагт)
+          const fill: { games?: number; lastBoutAt?: string; fast?: number } = {};
+          if (cur.games === undefined && meta.games !== undefined) fill.games = meta.games;
+          if (cur.lastBoutAt === undefined && meta.lastBoutAt !== undefined) fill.lastBoutAt = meta.lastBoutAt;
+          if (cur.fast === undefined && meta.fast !== undefined) fill.fast = meta.fast;
+          if (Object.keys(fill).length) {
+            engine.setRating(id, cur.rating, cur.source, cur.asOf, fill);
+            res.updated += 1;
+          }
         }
       }
     }
@@ -127,6 +177,16 @@ export class Analytics {
 
   private name(id: string): string {
     return this.archive.wrestlers[id]?.name ?? id;
+  }
+
+  /** Архивын бөхийн таамгийн тал (хурдан рейтинг, туршлага, нас) — барилдааны контекстгүй. */
+  private side(id: string, rating: number, games: number): PredictSide {
+    const s: PredictSide = { rating, games };
+    const f = this.fast.get(id);
+    if (f !== undefined) s.fast = f;
+    const age = ageFromBirthDate(this.archive.wrestlers[id]?.birthDate, Date.now());
+    if (age !== undefined) s.age = age;
+    return s;
   }
 
   /** wid → архивын барилдаануудын индексүүд (нэг удаа байгуулагдана). */
@@ -265,7 +325,7 @@ export class Analytics {
       elo:
         ra !== undefined && rb !== undefined
           ? {
-              pA: predictProbability({ rating: ra, games: recA.wins + recA.losses }, { rating: rb, games: recB.wins + recB.losses }),
+              pA: predictProbability(this.side(a, ra, recA.wins + recA.losses), this.side(b, rb, recB.wins + recB.losses)),
               ratingA: Math.round(ra),
               ratingB: Math.round(rb),
             }

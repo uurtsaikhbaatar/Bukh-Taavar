@@ -39,7 +39,23 @@ import type {
 } from './domain.ts';
 import type { BukhEvent } from './events.ts';
 import { costToBuy, initialQuantities, maxLossFromInitial, prices, sharesForSpend } from './lmsr.ts';
-import { DEFAULT_K, isTitle, predictProbability, seedRating, updateRatings, winProbability, type PredictSide } from './rating.ts';
+import {
+  ageFromBirthDate,
+  BIG_TOURNAMENT_KIND,
+  BRACKET_SIZES,
+  DEFAULT_K,
+  FAST_K,
+  isTitle,
+  MIN_BRACKET,
+  MIN_BRACKET_ROUNDS,
+  predictProbability,
+  REST_CAP_DAYS,
+  seedRating,
+  updateRatings,
+  winProbability,
+  type PredictContext,
+  type PredictSide,
+} from './rating.ts';
 import { apply, emptyState, type State } from './state.ts';
 import type { EventLog } from './store.ts';
 
@@ -75,7 +91,23 @@ export interface EngineOptions {
   maxCouponMultiplier?: number;
   /** Купоны дээд сонголт. */
   maxCouponLegs?: number;
+  /**
+   * Тэмцээний хүрээний дүрэм (анхдагч: Монгол бөх — 32+ бөх, 5+ даваа; гараар эхлүүлэхэд
+   * яг 32/64/…/1024). `false` — дүрэмгүй (жижиг туршилтын тэмцээнтэй тестэд).
+   */
+  bracket?: BracketRule | false;
 }
+
+export interface BracketRule {
+  /** Аварга тодорхойлох хамгийн бага оролцогч. */
+  minEntrants: number;
+  /** Аварга тодорхойлох хамгийн бага даваа. */
+  minRounds: number;
+  /** Гараар эхлүүлэх тэмцээний зөвшөөрөгдөх бүртгэл. */
+  sizes: readonly number[];
+}
+
+export const MONGOLIAN_BRACKET: BracketRule = { minEntrants: MIN_BRACKET, minRounds: MIN_BRACKET_ROUNDS, sizes: BRACKET_SIZES };
 
 interface ResolvedOptions {
   now: () => Date;
@@ -89,9 +121,10 @@ interface ResolvedOptions {
   maxCouponStake: number;
   maxCouponMultiplier: number;
   maxCouponLegs: number;
+  bracket: BracketRule | null;
 }
 
-export const DEFAULTS: Omit<ResolvedOptions, 'now' | 'idGen'> = {
+export const DEFAULTS: Omit<ResolvedOptions, 'now' | 'idGen' | 'bracket'> = {
   startingBalance: 100_000,
   defaultB: 2_000,
   minBet: 10,
@@ -218,6 +251,7 @@ export class Engine {
       maxCouponStake: options.maxCouponStake ?? DEFAULTS.maxCouponStake,
       maxCouponMultiplier: options.maxCouponMultiplier ?? DEFAULTS.maxCouponMultiplier,
       maxCouponLegs: options.maxCouponLegs ?? DEFAULTS.maxCouponLegs,
+      bracket: options.bracket === false ? null : (options.bracket ?? MONGOLIAN_BRACKET),
     };
     this.state = emptyState();
     for (const e of log.readAll()) apply(this.state, e);
@@ -405,45 +439,68 @@ export class Engine {
     return undefined;
   }
 
-  setRating(wrestlerId: WrestlerId, rating: number, source: RatingSource, asOf?: string, meta: { games?: number; lastBoutAt?: string } = {}): void {
+  setRating(wrestlerId: WrestlerId, rating: number, source: RatingSource, asOf?: string, meta: { games?: number; lastBoutAt?: string; fast?: number } = {}): void {
     this.requireWrestler(wrestlerId);
     if (!Number.isFinite(rating)) throw new EngineError('BAD_RATING', 'Рейтинг тоо байх ёстой.');
+    if (meta.fast !== undefined && !Number.isFinite(meta.fast)) throw new EngineError('BAD_RATING', 'Таамгийн рейтинг тоо байх ёстой.');
     const e: Extract<BukhEvent, { type: 'rating_set' }> = { ...this.stamp(), type: 'rating_set', wrestlerId, rating, source, asOf: asOf ?? this.nowIso().slice(0, 10) };
     if (meta.games !== undefined) e.games = meta.games;
     if (meta.lastBoutAt !== undefined) e.lastBoutAt = meta.lastBoutAt;
+    if (meta.fast !== undefined) e.fast = meta.fast;
     this.emit(e);
   }
 
   /** Бөхийн рейтинг: тогтоосон бол тэр, үгүй бол цолын суурь. */
-  rating(wrestlerId: WrestlerId): { rating: number; source: RatingSource; asOf?: string; games?: number; lastBoutAt?: string } {
+  rating(wrestlerId: WrestlerId): { rating: number; source: RatingSource; asOf?: string; games?: number; lastBoutAt?: string; fast?: number } {
     const w = this.requireWrestler(wrestlerId);
     const r = this.state.ratings.get(wrestlerId);
     if (r) {
       const out: ReturnType<Engine['rating']> = { rating: r.rating, source: r.source, asOf: r.asOf };
       if (r.games !== undefined) out.games = r.games;
       if (r.lastBoutAt !== undefined) out.lastBoutAt = r.lastBoutAt;
+      if (r.fast !== undefined) out.fast = r.fast;
       return out;
     }
     return { rating: seedRating(w.title), source: 'seed' };
   }
 
-  /** Таамгийн тал: рейтинг + туршлага + сүүлд барилдснаас хойшх хоног. */
+  /**
+   * Таамгийн тал: рейтинг (+ хурдан рейтинг), туршлага, амралт, нас. Рейтингийн бичлэггүй
+   * бөх = анх удаа барилдаж буй (туршлага 0, амралт дээд хязгаар) — загварын сургалттай ижил.
+   */
   predictSide(wrestlerId: WrestlerId): PredictSide {
+    const w = this.requireWrestler(wrestlerId);
     const r = this.rating(wrestlerId);
     const side: PredictSide = { rating: r.rating };
-    if (r.games !== undefined) side.games = r.games;
-    if (r.lastBoutAt !== undefined) {
-      const days = Math.floor((this.opts.now().getTime() - Date.parse(r.lastBoutAt)) / 86_400_000);
-      if (Number.isFinite(days)) side.daysSinceLast = Math.max(0, days);
+    if (r.fast !== undefined) side.fast = r.fast;
+    if (r.source === 'seed') {
+      side.games = 0;
+      side.daysSinceLast = REST_CAP_DAYS;
+    } else {
+      if (r.games !== undefined) side.games = r.games;
+      if (r.lastBoutAt !== undefined) {
+        const days = Math.floor((this.opts.now().getTime() - Date.parse(r.lastBoutAt)) / 86_400_000);
+        if (Number.isFinite(days)) side.daysSinceLast = Math.max(0, days);
+      }
     }
+    const age = ageFromBirthDate(w.birthDate, this.opts.now());
+    if (age !== undefined) side.age = age;
     return side;
   }
 
-  /** Хоёр бөхийн барилдааны загварын магадлал (калибровкдсон Elo — рейтинг, туршлага, амралт). */
-  priorForBout(aId: WrestlerId, bId: WrestlerId): BoutPrior {
+  /** Барилдааны таамгийн контекст: даваа, улсын наадам эсэх. */
+  boutContext(bout: Pick<Bout, 'round' | 'tournamentId'>): PredictContext {
+    const t = this.state.tournaments.get(bout.tournamentId);
+    const ctx: PredictContext = { round: bout.round };
+    if (t?.kind === BIG_TOURNAMENT_KIND) ctx.big = true;
+    return ctx;
+  }
+
+  /** Хоёр бөхийн барилдааны загварын магадлал (хурдан рейтинг, туршлага, амралт, нас; даваа/наадмын контекст). */
+  priorForBout(aId: WrestlerId, bId: WrestlerId, ctx: PredictContext = {}): BoutPrior {
     const a = this.rating(aId);
     const b = this.rating(bId);
-    const pA = predictProbability(this.predictSide(aId), this.predictSide(bId));
+    const pA = predictProbability(this.predictSide(aId), this.predictSide(bId), ctx);
     return { aId, bId, ratingA: a.rating, ratingB: b.rating, sourceA: a.source, sourceB: b.source, pA, pB: 1 - pA };
   }
 
@@ -503,23 +560,68 @@ export class Engine {
       if (!b.result) continue;
       wins.set(b.result.winnerId, (wins.get(b.result.winnerId) ?? 0) + 1);
     }
+    const losses = new Map<WrestlerId, number>();
     for (const b of bouts) {
       if (!b.result) continue;
       const loser = b.result.winnerId === b.aId ? b.bId : b.aId;
       eliminated.set(loser, wins.get(loser) ?? 0);
+      losses.set(loser, (losses.get(loser) ?? 0) + 1);
     }
-    // Аварга = сүүлийн давааны барилдаанд давсан, унаагүй бөх (сүүлийн даваанд нэмэлт — жишээ нь
-    // 3-р байрын/цолын — барилдаан байж болно; тэнд давсан ч унасан бол аварга биш).
-    for (const b of bouts) {
-      if (!b.result || b.round !== t.rounds) continue;
-      const w = b.result.winnerId;
-      if (!eliminated.has(w) || championId === undefined) championId = w;
-      if (!eliminated.has(w)) break;
+    // Аварга = ФИНАЛЫН давагч. Финал = сүүлийн даваанд хоёулаа ялагдаагүй ирсэн хоёр бөхийн
+    // цорын ганц барилдаан (3-р байрын г.м нэмэлт барилдаанд аль нэг нь өмнө ялагдсан байдаг).
+    // Хүрээний дүрэм зөрчигдсөн бол (32-оос цөөн бөх / 5-аас цөөн даваа — бүртгэл дутуу)
+    // аварга тооцохгүй: 2026-10-03-нд дутуу импортолсон тэмцээн 1-р даваагаар «дуусч» байв.
+    if (!this.bracketProblem(t, participated.size)) {
+      let lastRound = 0;
+      for (const b of bouts) if (b.round > lastRound) lastRound = b.round;
+      const finals = bouts.filter((b) => {
+        if (b.round !== lastRound || !b.result) return false;
+        const w = b.result.winnerId;
+        const l = w === b.aId ? b.bId : b.aId;
+        return !losses.has(w) && losses.get(l) === 1;
+      });
+      if (finals.length === 1) {
+        const w = finals[0]!.result!.winnerId;
+        // Зарласан сүүлийн даваанд болсон бол финал. Эс бөгөөс (devjee хоосон нэмэлт даваа
+        // зарласан) бүх оролцогч барилдаад ялагдаагүй бөх ганцхан үлдсэн үед л — гоцтой хүрээнд
+        // дундын даваанд ганц барилдаан байж болдог (96 бөх: 6-р даваанд 1 барилдаан + 1 гоц),
+        // хослол хэсэгчлэн зарлагдсан үед ч ялагдаагүй «ганц» мэт харагддаг.
+        const undefeated = [...participated].filter((id) => !losses.has(id));
+        const allPlayed = !t.entrants?.length || t.entrants.every((id) => participated.has(id));
+        if (lastRound === t.rounds || (allPlayed && undefeated.length === 1 && undefeated[0] === w)) championId = w;
+      }
     }
     const entrants = t.entrants && t.entrants.length ? t.entrants : [...participated];
     const out: ReturnType<Engine['tournamentProgress']> = { wins, eliminated, participated, finished: championId !== undefined, entrants };
     if (championId) out.championId = championId;
     return out;
+  }
+
+  /**
+   * Хүрээний дүрмийн зөрчил (Монгол бөх: 32+ бөх, 5+ даваа) — зөрчилгүй бол undefined.
+   * Ийм тэмцээнд аварга/«дууссан» тооцохгүй: бүртгэл дутуу (алдаа) эсвэл халз барилдаан.
+   */
+  bracketIssue(tournamentId: TournamentId): string | undefined {
+    const t = this.requireTournament(tournamentId);
+    const ids = new Set<WrestlerId>();
+    for (const b of this.bouts(tournamentId)) {
+      ids.add(b.aId);
+      ids.add(b.bId);
+    }
+    return this.bracketProblem(t, ids.size || (t.entrants?.length ?? 0));
+  }
+
+  /** Гараар эхлүүлэх тэмцээний бүртгэлд зөвшөөрөгдөх тоонууд (дүрэмгүй бол хоосон). */
+  bracketSizes(): readonly number[] {
+    return this.opts.bracket?.sizes ?? [];
+  }
+
+  private bracketProblem(t: Tournament, entrants: number): string | undefined {
+    const rule = this.opts.bracket;
+    if (!rule) return undefined;
+    if (entrants < rule.minEntrants) return `${entrants} бөх — тэмцээн ${rule.minEntrants}-аас цөөнгүй бөхтэй байна (бүртгэл дутуу эсвэл халз барилдаан)`;
+    if (t.rounds < rule.minRounds) return `${t.rounds} даваа — тэмцээн ${rule.minRounds}-аас цөөнгүй даваатай байна (давааны мэдээлэл дутуу)`;
+    return undefined;
   }
 
   // ── даваа удирдах (админ: эхлүүлэх / дуусгах) ──
@@ -593,6 +695,12 @@ export class Engine {
       pool = pool.filter((id) => winners.has(id) || !took.has(id));
     }
     if (pool.length < 2) throw new EngineError('NO_ENTRANTS', round === 1 ? 'Оролцогчдын жагсаалт хэрэгтэй (дор хаяж 2 бөх) — тэмцээний entrants тавь.' : 'Хослуулах бөх хүрэлцэхгүй.');
+    const rule = this.opts.bracket;
+    if (round === 1 && rule) {
+      // Монгол бөх: бүртгэл яг 32/64/…/1024, давааны тоо = log2(бүртгэл) — эс бөгөөс эхлүүлэхгүй
+      if (!rule.sizes.includes(pool.length)) throw new EngineError('BAD_BRACKET', `Бүртгэл ${pool.length} бөх — тэмцээн ${rule.sizes.join(', ')} бөхтэй байх ёстой.`);
+      if (2 ** t.rounds !== pool.length) throw new EngineError('BAD_BRACKET', `${pool.length} бөхөд ${Math.log2(pool.length)} даваа байх ёстой (тэмцээн ${t.rounds} даваатай).`);
+    }
     const rank = new Map(p.entrants.map((id, i) => [id, i]));
     const byEntrants = !!(t.entrants && t.entrants.length);
     pool.sort((a, b) => (byEntrants ? rank.get(a)! - rank.get(b)! : this.rating(b).rating - this.rating(a).rating));
@@ -644,7 +752,7 @@ export class Engine {
     const results: { boutId: BoutId; winnerId: WrestlerId }[] = [];
     let resolvedMarkets = 0;
     for (const b of pending) {
-      const p = this.priorForBout(b.aId, b.bId);
+      const p = this.priorForBout(b.aId, b.bId, this.boutContext(b));
       const aWins = mode === 'favorite' ? p.pA >= 0.5 : rng() < p.pA;
       const winnerId = aWins ? b.aId : b.bId;
       const r = this.recordBoutResult(b.id, winnerId);
@@ -799,7 +907,7 @@ export class Engine {
     const result: { bout: Bout; market?: Market } = { bout: this.requireBout(id) };
     if (input.withMarket ?? true) {
       const prior = input.prior ?? (() => {
-        const p = this.priorForBout(input.aId, input.bId);
+        const p = this.priorForBout(input.aId, input.bId, this.boutContext(bout));
         return [p.pA, p.pB] as [number, number];
       })();
       const marketInput: Parameters<Engine['createMarket']>[0] = {
@@ -842,14 +950,17 @@ export class Engine {
       throw new EngineError('BAD_WINNER', 'Давагч нь барилдааны хоёр бөхийн нэг байх ёстой.');
     }
     const t = this.requireTournament(bout.tournamentId);
-    const ratingUpdates: { wrestlerId: WrestlerId; rating: number; source: RatingSource; asOf: string }[] = [];
+    const ratingUpdates: { wrestlerId: WrestlerId; rating: number; source: RatingSource; asOf: string; fast?: number }[] = [];
     if (options.updateRatings ?? true) {
-      const ra = this.rating(bout.aId).rating;
-      const rb = this.rating(bout.bId).rating;
-      const [na, nb] = updateRatings(ra, rb, winnerId === bout.aId, this.opts.eloK);
+      const a = this.rating(bout.aId);
+      const b = this.rating(bout.bId);
+      const aWon = winnerId === bout.aId;
+      const [na, nb] = updateRatings(a.rating, b.rating, aWon, this.opts.eloK);
+      // Таамгийн (хурдан) рейтинг — байхгүй бол үндсэн рейтингээс эхэлнэ
+      const [fa, fb] = updateRatings(a.fast ?? a.rating, b.fast ?? b.rating, aWon, FAST_K);
       ratingUpdates.push(
-        { wrestlerId: bout.aId, rating: na, source: 'local', asOf: t.date },
-        { wrestlerId: bout.bId, rating: nb, source: 'local', asOf: t.date },
+        { wrestlerId: bout.aId, rating: na, source: 'local', asOf: t.date, fast: fa },
+        { wrestlerId: bout.bId, rating: nb, source: 'local', asOf: t.date, fast: fb },
       );
     }
     this.emit({ ...this.stamp(), type: 'bout_result', boutId, winnerId, ratingUpdates });

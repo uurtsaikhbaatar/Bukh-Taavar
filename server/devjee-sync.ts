@@ -14,7 +14,7 @@
 import type { DevjeeHomeDto, DevjeeSyncStatusDto, DevjeeTournamentDto } from '../app/src/shared/api.ts';
 import { AIMAGS, TOURNAMENT_TYPES, toWrestler, type DevjeeClient, type DevjeeRating, type DevjeeStateMatch, type DevjeeTournamentState } from '../src/devjee.ts';
 import type { Engine } from '../src/engine.ts';
-import { titleFromCode, titleInfo } from '../src/rating.ts';
+import { MIN_BRACKET_ROUNDS, titleFromCode, titleInfo } from '../src/rating.ts';
 
 export type DevjeeApi = Pick<DevjeeClient, 'home' | 'tournament' | 'tournamentState' | 'fetchWrestlers' | 'latestRatings' | 'currentRating'>;
 
@@ -60,6 +60,26 @@ interface SyncState {
 
 const CHUNK = 100;
 const TITLE_LOOKUP_MIN_CODE = 9; // аймгийн начин ба түүнээс дээш
+const HOUR = 3_600_000;
+/** Хүрээ дутуу тэмцээнийг тэмцээний өдрөөс хойш энэ хугацаанд автоматаар засахыг оролдоно. */
+const REPAIR_WINDOW_MS = 72 * HOUR;
+/** Бүх барилдаан шийдэгдсэн боловч финал тодроогүй (халз, багийн г.м) — энэ хугацааны дараа sync унтарна. */
+const EXPIRE_RESOLVED_MS = 72 * HOUR;
+/** Юу ч болсон энэ хугацааны дараа sync унтарна. */
+const EXPIRE_HARD_MS = 7 * 24 * HOUR;
+
+/**
+ * devjee төлөвт зарлагдсан давааны тоо: `rounds` map эсвэл 1-р давааны барилдааны тооноос
+ * (2·n бөх → ⌈log2 2n⌉ даваа; гоцтой хүрээ дараа нь өснө) — аль их нь. 0 = юу ч зарлагдаагүй.
+ */
+export function declaredRounds(state: DevjeeTournamentState): number {
+  let r1 = 0;
+  for (const m of Object.values(state.matches)) if (m.round === 1 && m.w1 && m.w2 && m.w1 !== m.w2) r1 += 1;
+  return Math.max(Object.keys(state.rounds).length, r1 > 0 ? Math.ceil(Math.log2(2 * r1)) : 0);
+}
+
+/** Тэмцээний өдрийн төгсгөл (Улаанбаатарын цагаар). */
+const dayEnd = (date: string): number => Date.parse(`${date}T23:59:59+08:00`);
 
 export function shortName(name: string, max = 70): string {
   const n = name.trim().replace(/\s+/g, ' ');
@@ -90,7 +110,28 @@ export class DevjeeSync {
     for (const t of this.engine.tournaments()) {
       if (t.devjeeId) this.states.set(t.id, { devjeeId: t.devjeeId, enabled: !!t.syncEnabled });
     }
+    this.autoRepair();
     this.refreshTimer();
+  }
+
+  /**
+   * Хүрээний дүрэм зөрчсөн (32-оос цөөн бөх / 5-аас цөөн даваа — бүртгэл дутуу) devjee
+   * тэмцээнийг тэмцээний өдрөөс 72 цагийн дотор бол sync-ийг асааж засна: дараагийн
+   * sync даваа, оролцогч, барилдааныг devjee-ээс нөхнө. Монгол бөхийн тэмцээн 1-2 бөхөөр
+   * дуусдаггүй — ийм төлөв бол алдаа.
+   */
+  autoRepair(): string[] {
+    const repaired: string[] = [];
+    for (const [id, st] of this.states) {
+      if (st.enabled || !this.engine.state.tournaments.has(id)) continue;
+      const t = this.engine.tournament(id);
+      const issue = this.engine.bracketIssue(id);
+      if (!issue || this.now() - dayEnd(t.date) > REPAIR_WINDOW_MS) continue;
+      this.setEnabled(id, true);
+      repaired.push(id);
+      this.log(`${id}: хүрээ дутуу (${issue}) — sync автоматаар асав (засвар)`);
+    }
+    return repaired;
   }
 
   // ── жагсаалт ──
@@ -118,8 +159,10 @@ export class DevjeeSync {
     const info = await this.client.tournament(tid);
     const { state } = await this.client.tournamentState(tid, 60_000);
     const wids = Object.keys(state.wrestlers);
-    const roundsFromState = Object.keys(state.rounds).length;
-    const rounds = Math.max(1, roundsFromState || Math.ceil(Math.log2(Math.max(2, wids.length))));
+    // Даваа: зарласан давааны тоо эсвэл 1-р давааны барилдааны тооноос (аль их нь); аль аль нь
+    // байхгүй бол бүртгэлээс. Дутуу байвал дараагийн sync-үүд өсгөнө (growRounds).
+    const declared = declaredRounds(state);
+    const rounds = Math.max(1, declared || Math.ceil(Math.log2(Math.max(2, wids.length))));
 
     let tournament = this.tournamentByDevjeeId(tid);
     let created = false;
@@ -230,24 +273,35 @@ export class DevjeeSync {
    * төлөв нь дутуу байхад (даваа зарлагдаагүй) импортолсон бол дараагийн sync-үүд засна.
    */
   private growRounds(tournamentId: string, state: DevjeeTournamentState): number {
-    const t = this.engine.tournament(tournamentId);
-    const fromState = Object.keys(state.rounds).length;
-    if (fromState > t.rounds) {
+    const prev = this.engine.tournament(tournamentId).rounds;
+    const fromState = declaredRounds(state);
+    if (fromState > prev) {
       this.engine.updateTournament(tournamentId, { rounds: fromState });
-      this.log(`${tournamentId}: даваа ${t.rounds} → ${fromState}`);
+      this.log(`${tournamentId}: даваа ${prev} → ${fromState}`);
       return fromState;
     }
-    return t.rounds;
+    return prev;
   }
 
-  /** Оролцогчдыг зэрэг дэвийн дарааллаар шинэчилнэ (зөвхөн бидэнд бүртгэлтэй бөх); дээд тал нь 2^rounds. */
+  /**
+   * Оролцогчид зэрэг дэвийн дарааллаар (зөвхөн бидэнд бүртгэлтэй бөх). Барилдаан зарлагдсан
+   * бол = бодитоор хослуулсан бөхчүүд (бүртгэлд барилдаагүй бөх олон байдаг — 276 бүртгэлээс
+   * 128 барилдсан); үгүй бол бүртгэлийн эхний 2^max(даваа, 5).
+   */
   private refreshEntrants(tournamentId: string, state: DevjeeTournamentState, rounds: number): void {
     const t = this.engine.tournament(tournamentId);
-    const ordered = Object.values(state.wrestlers)
-      .sort((a, b) => a.order - b.order)
-      .map((w) => (this.engine.state.wrestlers.has(w.id) ? w.id : this.engine.wrestlerByDevjeeId(w.id)?.id))
-      .filter((id): id is string => !!id)
-      .slice(0, 2 ** Math.min(rounds, 14));
+    const localId = (wid: string) => (this.engine.state.wrestlers.has(wid) ? wid : this.engine.wrestlerByDevjeeId(wid)?.id);
+    const orderOf = (wid: string) => state.wrestlers[wid]?.order ?? Number.MAX_SAFE_INTEGER;
+    const paired = new Set<string>();
+    for (const m of Object.values(state.matches)) {
+      if (!m.w1 || !m.w2 || m.w1 === m.w2) continue;
+      paired.add(m.w1);
+      paired.add(m.w2);
+    }
+    const source = paired.size ? [...paired] : Object.keys(state.wrestlers);
+    const sorted = source.sort((a, b) => orderOf(a) - orderOf(b));
+    const capped = paired.size ? sorted : sorted.slice(0, 2 ** Math.min(Math.max(rounds, MIN_BRACKET_ROUNDS), 10));
+    const ordered = capped.map(localId).filter((id): id is string => !!id);
     const prev = t.entrants ?? [];
     if (ordered.length && (prev.length !== ordered.length || prev.some((id, i) => id !== ordered[i]))) {
       this.engine.updateTournament(tournamentId, { entrants: ordered });
@@ -282,19 +336,20 @@ export class DevjeeSync {
       this.refreshEntrants(tournamentId, state, rounds);
       st.lastSyncAt = new Date(this.now()).toISOString();
       delete st.lastError;
-      // Авто-унтраалт зөвхөн ЖИНХЭНЭ төгсгөлд: хүрээн доторх бүх барилдаан шийдэгдсэн БА
-      // финал (1 барилдаантай сүүлийн даваа) шийдэгдсэн үед. Эс бөгөөс дутуу төлөвийг
-      // (жишээ нь зөвхөн 1-р даваа нь орж ирсэн) «дууссан» гэж андуурч унтардаг байсан.
-      if (st.enabled && this.engine.roundStatus(tournamentId).finished) {
+      // Авто-унтраалт: (1) ЖИНХЭНЭ төгсгөл — аварга тодорсон (хүрээний дүрэм хангагдсан,
+      // финал шийдэгдсэн) ба бүх барилдаан шийдэгдсэн; (2) финалгүй (халз, багийн) — бүгд
+      // шийдэгдээд 72 цаг; (3) юу ч болсон 7 хоног. Дутуу төлөвийг «дууссан» гэж андуурахгүй.
+      if (st.enabled) {
         const valid = Object.values(state.matches).filter((m) => m.w1 && m.w2 && m.w1 !== m.w2 && m.round >= 1 && m.round <= rounds);
         const allResolved = valid.length > 0 && valid.every((m) => m.winner === 1 || m.winner === 2);
         const maxRound = valid.reduce((mx, m) => Math.max(mx, m.round), 0);
         const finalSeen = valid.filter((m) => m.round === maxRound).length === 1;
-        // Багийн г.м финалгүй форматад: тэмцээний өдрөөс 48 цаг өнгөрсөн бол мөн унтраана
-        const stale = this.now() - Date.parse(`${state.date || t.date}T23:59:59+08:00`) > 48 * 3_600_000;
-        if (allResolved && (finalSeen || stale)) {
+        const age = this.now() - dayEnd(state.date || t.date);
+        const done = allResolved && finalSeen && this.engine.roundStatus(tournamentId).finished;
+        const expired = (allResolved && age > EXPIRE_RESOLVED_MS) || age > EXPIRE_HARD_MS;
+        if (done || expired) {
           this.setEnabled(tournamentId, false);
-          this.log(`${tournamentId}: тэмцээн дууссан — sync автоматаар унтрав`);
+          this.log(`${tournamentId}: ${done ? 'тэмцээн дууссан' : 'хугацаа өнгөрсөн'} — sync автоматаар унтрав`);
         }
       }
     } catch (err) {
@@ -418,6 +473,8 @@ export class DevjeeSync {
     };
     if (st?.lastSyncAt) dto.lastSyncAt = st.lastSyncAt;
     if (st?.lastError) dto.lastError = st.lastError;
+    const issue = this.engine.bracketIssue(tournamentId);
+    if (issue) dto.warning = issue;
     return dto;
   }
 

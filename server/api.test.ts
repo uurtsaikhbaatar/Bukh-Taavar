@@ -30,7 +30,7 @@ async function startServer(opts: { failFlush?: boolean } = {}): Promise<TestServ
     },
   };
   let n = 0;
-  const engine = new Engine(new MemoryLog(), { now: () => new Date(clock.t), idGen: () => `e${++n}`, defaultB: 1_000 });
+  const engine = new Engine(new MemoryLog(), { now: () => new Date(clock.t), idGen: () => `e${++n}`, defaultB: 1_000, bracket: false }); // 8 бөхтэй туршилтын тэмцээн — хүрээний дүрмийг engine/devjee тестүүд шалгана
   const emails: EmailMessage[] = [];
   const auth = new Auth(new MemoryAuthStore(), {
     now: () => clock.t,

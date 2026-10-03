@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  ageFromBirthDate,
   DEFAULT_K,
   isTitle,
   PREDICT_WEIGHTS,
@@ -87,4 +88,32 @@ test('цолын код ↔ цол, суурь рейтинг эрэмбэтэй
   // Улсын цолтны кодууд devjee-тэй ижил дараалалтай
   const uls = TITLES.filter((t) => t.level === 'uls').map((t) => t.code);
   assert.deepEqual(uls, [13, 14, 15, 16, 17, 18, 19, 20, 21]);
+});
+
+test('таамгийн загвар (2026-10-03): даваа, улсын наадам, нас, хурдан рейтинг', () => {
+  const a = { rating: 2000 };
+  const b = { rating: 1800 };
+  const p2 = predictProbability(a, b, { round: 2 });
+  assert.ok(predictProbability(a, b, { round: 1 }) > p2, '1-р даваанд фаворит илүү найдвартай');
+  assert.ok(predictProbability(a, b, { round: 5 }) < p2, 'хожуу даваанд бага');
+  assert.ok(predictProbability(a, b, { round: 2, big: true }) > p2, 'улсын наадамд илүү');
+  // Хурдан рейтинг байвал түүгээр
+  close(predictProbability({ rating: 1500, fast: 2000 }, { rating: 1900, fast: 1800 }), predictProbability(a, b));
+  // Ижил рейтингтэй бол залуу нь давуу; тэгш хэм (нас, контексттой)
+  const young = { rating: 1900, age: 22 };
+  const old = { rating: 1900, age: 34 };
+  assert.ok(predictProbability(young, old) > 0.5);
+  close(predictProbability(young, old, { round: 1, big: true }) + predictProbability(old, young, { round: 1, big: true }), 1);
+  // Нэг талын нас мэдэгдэхгүй бол насны гишүүнгүй
+  close(predictProbability({ rating: 1900, age: 22 }, { rating: 1900 }), 0.5);
+});
+
+test('ageFromBirthDate: мэдэгдэхгүйн тэмдэг, хязгаар', () => {
+  const at = Date.parse('2026-10-03');
+  assert.equal(ageFromBirthDate(undefined, at), undefined);
+  assert.equal(ageFromBirthDate('1900-01-01', at), undefined);
+  assert.equal(ageFromBirthDate('2020-01-01', at), undefined, '14-өөс залуу');
+  assert.equal(ageFromBirthDate('1940-01-01', at), undefined, '65-аас ахмад');
+  const age = ageFromBirthDate('1996-10-03', at)!;
+  assert.ok(Math.abs(age - 30) < 0.01);
 });

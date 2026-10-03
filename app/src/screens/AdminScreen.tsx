@@ -775,6 +775,7 @@ function DevjeeTab({ refreshKey }: { refreshKey: number }) {
                 {st.tournamentId} · барилдаан {st.bouts} (шийдсэн {st.resolved}) · {st.lastSyncAt ? `сүүлд ${fmtWhen(st.lastSyncAt)}` : 'хийгээгүй'}
                 {st.lastError ? ` · алдаа: ${st.lastError}` : ''}
               </P>
+              {st.warning ? <Text style={{ color: theme.warn, fontSize: 12.5, fontWeight: '700' }}>⚠ {st.warning} — аварга тооцохгүй{st.enabled ? ', devjee-ээс засагдахыг хүлээж байна' : ''}</Text> : null}
               <Row>
                 <Button small title={st.enabled ? 'Sync унтраах' : 'Sync асаах'} variant={st.enabled ? 'danger' : 'accent'} loading={busy} onPress={() => run(async () => {
                   await api(`/api/admin/devjee/sync/${st.tournamentId}`, { body: { enabled: !st.enabled } });

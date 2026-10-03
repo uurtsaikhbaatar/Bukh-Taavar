@@ -91,6 +91,14 @@ async function main(): Promise<void> {
   } catch (err) {
     console.error('Архивын шинжилгээ ачаалагдсангүй:', err instanceof Error ? err.message : err);
   }
+  if (analytics) {
+    // Таамгийн шинж (хурдан рейтинг, туршлага, огноо) дутуу бөхчүүдэд архиваас нөхнө — идемпотент
+    const filled = analytics.backfillPredictive(engine);
+    if (filled) {
+      await flush();
+      console.log(`[analytics] таамгийн шинж нөхөв: ${filled} бөх`);
+    }
+  }
 
   const router = createRouter({
     engine,

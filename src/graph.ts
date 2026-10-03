@@ -19,7 +19,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { seedRating, titleFromCode, updateRatings, winProbability, type Title } from './rating.ts';
+import { FAST_K, seedRating, titleFromCode, updateRatings, winProbability, type Title } from './rating.ts';
 
 export interface ArchiveWrestler {
   name: string;
@@ -416,6 +416,8 @@ export class BoutGraph {
 
 export interface EloReplayOptions {
   k?: number;
+  /** Таамгийн (хурдан) рейтингийн K — зэрэгцээ тооцно. */
+  fastK?: number;
   /** Бөх бүрийн анхны рейтинг (цолын суурь өгөхөд ашиглана). */
   seed?: (id: string) => number;
   asOf?: string;
@@ -423,20 +425,23 @@ export interface EloReplayOptions {
 }
 
 /**
- * Барилдаануудыг огноогоор дараалуулан Elo тооцно (devjee: K=32).
- * Буцаах: id → рейтинг, мөн барилдаан бүрийн өмнөх таамаг (калибровкид).
+ * Барилдаануудыг огноогоор дараалуулан Elo тооцно (devjee: K=32) — зэрэгцээ таамгийн
+ * (хурдан, `fastK`) рейтингийг ч. Буцаах: id → рейтинг, мөн барилдаан бүрийн өмнөх таамаг.
  */
 export function eloReplay(
   bouts: ArchiveBout[],
   options: EloReplayOptions = {},
-): { ratings: Map<string, number>; predictions: { date: string; p1: number; won1: boolean }[]; games: Map<string, number>; lastDate: Map<string, string> } {
+): { ratings: Map<string, number>; fast: Map<string, number>; predictions: { date: string; p1: number; won1: boolean }[]; games: Map<string, number>; lastDate: Map<string, string> } {
   const k = options.k ?? 32;
+  const fastK = options.fastK ?? FAST_K;
   const seed = options.seed ?? (() => 1500);
   const ratings = new Map<string, number>();
+  const fast = new Map<string, number>();
   const games = new Map<string, number>();
   const lastDate = new Map<string, string>();
   const predictions: { date: string; p1: number; won1: boolean }[] = [];
   const get = (id: string) => ratings.get(id) ?? seed(id);
+  const getFast = (id: string) => fast.get(id) ?? seed(id);
   const excludeNoShow = options.excludeNoShow ?? true;
   const sorted = [...bouts]
     .filter((b) => (b.winner === 1 || b.winner === 2) && b.w1 !== b.w2 && !(excludeNoShow && b.noShow) && (!options.asOf || b.date < options.asOf))
@@ -449,12 +454,15 @@ export function eloReplay(
     const [n1, n2] = updateRatings(r1, r2, b.winner === 1, k);
     ratings.set(b.w1, n1);
     ratings.set(b.w2, n2);
+    const [f1, f2] = updateRatings(getFast(b.w1), getFast(b.w2), b.winner === 1, fastK);
+    fast.set(b.w1, f1);
+    fast.set(b.w2, f2);
     games.set(b.w1, (games.get(b.w1) ?? 0) + 1);
     games.set(b.w2, (games.get(b.w2) ?? 0) + 1);
     lastDate.set(b.w1, b.date);
     lastDate.set(b.w2, b.date);
   }
-  return { ratings, predictions, games, lastDate };
+  return { ratings, fast, predictions, games, lastDate };
 }
 
 /** Архивын бөхийн цолын суурь рейтинг (devjee код → манай цол → суурь). */

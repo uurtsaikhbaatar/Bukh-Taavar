@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { Engine, EngineError } from './engine.ts';
+import { Engine, EngineError, type BracketRule } from './engine.ts';
 import { predictProbability, winProbability } from './rating.ts';
 import { serializeState } from './state.ts';
 import { JsonlLog, MemoryLog } from './store.ts';
@@ -15,7 +15,8 @@ interface Harness {
   clock: { t: number; advance(ms: number): void };
 }
 
-function makeEngine(opts: { startingBalance?: number; defaultB?: number } = {}): Harness {
+/** Хуучин тестүүд жижиг (4–16 бөх) туршилтын тэмцээнтэй — хүрээний дүрмийг тусдаа тестээр шалгана. */
+function makeEngine(opts: { startingBalance?: number; defaultB?: number; bracket?: BracketRule | false } = {}): Harness {
   const log = new MemoryLog();
   const clock = {
     t: Date.parse('2026-07-10T00:00:00.000Z'),
@@ -29,6 +30,7 @@ function makeEngine(opts: { startingBalance?: number; defaultB?: number } = {}):
     idGen: () => `id${String(++n).padStart(4, '0')}`,
     startingBalance: opts.startingBalance ?? 10_000,
     defaultB: opts.defaultB ?? 1_000,
+    bracket: opts.bracket ?? false,
   });
   return { engine, log, clock };
 }
@@ -52,8 +54,8 @@ function seeded() {
 
 test('амьдралын мөчлөг: prior → авах → үнэ хөдлөх → зарах → үр дүн → төлбөр → самбар', () => {
   const { engine, market } = seeded();
-  // Prior = калибровкдсон таамаг (туршлага мэдэгдэхгүй → зөвхөн рейтинг)
-  const pA = predictProbability({ rating: 2354 }, { rating: 2301 });
+  // Prior = таамгийн загвар (туршлага/нас мэдэгдэхгүй → зөвхөн рейтинг; 9-р даваа = хожуу даваа)
+  const pA = predictProbability({ rating: 2354 }, { rating: 2301 }, { round: 9 });
   const probs0 = engine.probabilities(market.id);
   assert.ok(Math.abs(probs0[0]! - pA) < 1e-9);
   assert.equal(market.kind, 'bout');
@@ -321,7 +323,7 @@ test('олон арилжааны дараа ч инвариант, хаусын
   assert.ok(m.tradeCount > 200);
   const winner = rnd() < 0.5 ? 0 : 1;
   const bound = engine.marketView(market.id).maxHouseLoss;
-  const p0 = predictProbability({ rating: 2354 }, { rating: 2301 });
+  const p0 = predictProbability({ rating: 2354 }, { rating: 2301 }, { round: 9 });
   assert.ok(Math.abs(bound - 1_000 * Math.log(1 / Math.min(p0, 1 - p0))) < 1e-6);
   engine.resolveMarket(market.id, winner);
   engine.checkInvariants();
@@ -338,7 +340,7 @@ test('bout зах зээл нээхгүй байх, prior гараар өгөх,
   const prior = engine.priorForBout('w1', 'w3');
   assert.equal(prior.sourceB, 'seed');
   assert.equal(prior.ratingB, 1650);
-  assert.ok(prior.pA > 0.95);
+  assert.ok(prior.pA > 0.9);
   const r2 = engine.createBout({ id: 'b4', tournamentId: 't1', round: 2, aId: 'w2', bId: 'w3', prior: [0.6, 0.4] });
   assert.ok(Math.abs(engine.probabilities(r2.market!.id)[0]! - 0.6) < 1e-9);
   // Үр дүн бүртгэхэд зах зээл байхгүй барилдаан ч болно
@@ -656,4 +658,112 @@ test('бөх засах, devjee id-аар хайх, дэвтэр хязгаар'
   for (let i = 0; i < 5; i++) engine.grantTokens('u1', 10, 'тест');
   assert.equal(engine.ledger('u1', 3).length, 3);
   assert.equal(engine.ledger(undefined, 100).length, 3 + 5);
+});
+
+test('хүрээний дүрэм (Монгол бөх): 32/64/…/1024 бүртгэлгүй бол эхлүүлэхгүй; 32 бөх бүтэн тоглогдоход л аварга', () => {
+  const engine = new Engine(new MemoryLog(), { idGen: (() => { let n = 0; return () => `g${++n}`; })(), defaultB: 1_000 }); // анхдагч дүрэм
+  const ids = Array.from({ length: 32 }, (_, i) => `x${i + 1}`);
+  ids.forEach((id, i) => {
+    engine.addWrestler({ id, name: `Бөх ${i + 1}`, title: 'аймгийн_начин' });
+    engine.setRating(id, 2200 - i * 10, 'devjee', '2026-07-01');
+  });
+  // 8 бөх — эхлүүлэхгүй
+  engine.createTournament({ id: 'small', name: 'Найман бөх', date: '2026-07-11', rounds: 3, entrants: ids.slice(0, 8) });
+  assert.throws(() => engine.startRound('small', 1), (e: unknown) => e instanceof EngineError && e.code === 'BAD_BRACKET');
+  // 32 бөх, гэхдээ 6 даваа — эхлүүлэхгүй (даваа = log2)
+  engine.createTournament({ id: 'bad', name: 'Буруу даваа', date: '2026-07-11', rounds: 6, entrants: ids });
+  assert.throws(() => engine.startRound('bad', 1), /5 даваа/);
+  // 32 бөх, 5 даваа — бүтэн тоглогдоно
+  engine.createTournament({ id: 'ok', name: 'Зөв', date: '2026-07-11', rounds: 5, entrants: ids });
+  for (let r = 1; r <= 5; r++) {
+    engine.startRound('ok', r, { withMarket: false });
+    engine.finishRound('ok', r, { mode: 'favorite' });
+    if (r < 5) assert.equal(engine.roundStatus('ok').finished, false, `${r}-р давааны дараа дуусаагүй`);
+  }
+  assert.equal(engine.roundStatus('ok').championId, 'x1');
+  assert.equal(engine.bracketIssue('ok'), undefined);
+});
+
+test('аварга: сүүлийн даваанд «финал» олон бол (дутуу импорт) аварга тодорхойгүй; халз барилдаан дүрэмтэй горимд дуусахгүй', () => {
+  // Дүрэмгүй горимд ч бүтцийн хамгаалалт: 1 даваатай гэж бүртгэгдсэн, 4 барилдаан шийдэгдсэн → 4 «финал» → аварга алга
+  const loose = new Engine(new MemoryLog(), { idGen: (() => { let n = 0; return () => `l${++n}`; })(), bracket: false });
+  for (let i = 1; i <= 8; i++) loose.addWrestler({ id: `w${i}`, name: `Бөх ${i}`, title: 'цолгүй' });
+  loose.createTournament({ id: 't', name: 'Дутуу', date: '2026-10-03', rounds: 1 });
+  for (let i = 1; i <= 4; i++) {
+    loose.createBout({ id: `b${i}`, tournamentId: 't', round: 1, aId: `w${2 * i - 1}`, bId: `w${2 * i}`, withMarket: false });
+    loose.recordBoutResult(`b${i}`, `w${2 * i - 1}`);
+  }
+  assert.equal(loose.roundStatus('t').finished, false, '1-р даваагаар тэмцээн дуусахгүй');
+  // Халз барилдаан (2 бөх, 1 барилдаан): дүрэмгүй горимд аварга, дүрэмтэй горимд — үгүй (⚠)
+  const halz = (bracket?: false) => {
+    const e = new Engine(new MemoryLog(), { idGen: (() => { let n = 0; return () => `h${++n}`; })(), ...(bracket === false ? { bracket: false as const } : {}) });
+    e.addWrestler({ id: 'a', name: 'А', title: 'улсын_арслан' });
+    e.addWrestler({ id: 'b', name: 'Б', title: 'улсын_арслан' });
+    e.createTournament({ id: 'h', name: 'Халз', date: '2026-02-02', rounds: 1 });
+    e.createBout({ id: 'hb', tournamentId: 'h', round: 1, aId: 'a', bId: 'b', withMarket: false });
+    e.recordBoutResult('hb', 'a');
+    return e;
+  };
+  assert.equal(halz(false).roundStatus('h').championId, 'a');
+  const strict = halz();
+  assert.equal(strict.roundStatus('h').finished, false);
+  assert.match(strict.bracketIssue('h') ?? '', /2 бөх/);
+});
+
+test('таамгийн (хурдан, K=64) рейтинг: үр дүнгээр шинэчлэгдэж, replay-д хадгалагдана; дэлгэцийн рейтинг K=32 хэвээр', () => {
+  const log = new MemoryLog();
+  const engine = new Engine(log, { idGen: (() => { let n = 0; return () => `f${++n}`; })(), bracket: false });
+  engine.addWrestler({ id: 'a', name: 'А', title: 'цолгүй', birthDate: '2000-05-01' });
+  engine.addWrestler({ id: 'b', name: 'Б', title: 'цолгүй' });
+  engine.setRating('a', 1800, 'devjee', '2026-01-01', { fast: 1850, games: 10 });
+  engine.setRating('b', 1800, 'devjee', '2026-01-01');
+  engine.createTournament({ id: 't', name: 'Т', date: '2026-07-11', rounds: 5 });
+  engine.createBout({ id: 'x', tournamentId: 't', round: 2, aId: 'a', bId: 'b', withMarket: false });
+  engine.recordBoutResult('x', 'b');
+  const ra = engine.rating('a');
+  const rb = engine.rating('b');
+  assert.ok(Math.abs(ra.rating - (1800 - 16)) < 1e-9, 'K=32: тэнцүү рейтингээс 16 оноо');
+  assert.ok(Math.abs(ra.fast! - (1850 - 64 * winProbability(1850, 1800))) < 1e-9, 'K=64 хурдан рейтинг');
+  assert.ok(Math.abs(rb.fast! - (1800 + 64 * winProbability(1850, 1800))) < 1e-9, 'хурдан рейтинггүй тал үндсэн рейтингээс эхэлнэ');
+  // rating_set хурдан рейтинг өгөхгүй бол өмнөх утга хадгалагдана
+  engine.setRating('a', 1700, 'local', '2026-07-12');
+  assert.equal(engine.rating('a').fast, ra.fast);
+  // Replay — ижил төлөв
+  const again = new Engine(log, { bracket: false });
+  assert.deepEqual(again.rating('a'), engine.rating('a'));
+  assert.deepEqual(again.rating('b'), engine.rating('b'));
+  // Таамгийн тал: нас (төрсөн огноотой), хурдан рейтинг
+  const side = engine.predictSide('a');
+  assert.equal(side.fast, ra.fast);
+  assert.ok(side.age !== undefined && side.age > 20 && side.age < 30);
+  assert.equal(engine.predictSide('b').age, undefined);
+});
+
+test('аварга: гоцтой хүрээ (дундын даваанд 1 барилдаан + гоц) дундуур дуусахгүй; хоосон нэмэлт даваа зарласан ч ганц ялагдаагүй үлдвэл аварга', () => {
+  const mk = (n: number, rounds: number) => {
+    const e = new Engine(new MemoryLog(), { idGen: (() => { let k = 0; return () => `y${++k}`; })(), bracket: false });
+    for (let i = 0; i < n; i++) e.addWrestler({ id: String.fromCharCode(97 + i), name: `Бөх ${i}`, title: 'цолгүй' });
+    e.createTournament({ id: 't', name: 'Т', date: '2026-08-23', rounds });
+    let k = 0;
+    const play = (round: number, a: string, b: string, w: string) => {
+      e.createBout({ id: `b${++k}`, tournamentId: 't', round, aId: a, bId: b, withMarket: false });
+      e.recordBoutResult(`b${k}`, w);
+    };
+    return { e, play };
+  };
+  // 6 бөх, 3 даваа: 2-р даваанд a–c (1 барилдаан), e гоц → дуусаагүй; 3-р даваанд a–e → аварга a
+  const g = mk(6, 3);
+  g.play(1, 'a', 'b', 'a');
+  g.play(1, 'c', 'd', 'c');
+  g.play(1, 'e', 'f', 'e');
+  g.play(2, 'a', 'c', 'a');
+  assert.equal(g.e.roundStatus('t').finished, false, 'гоц авсан e ялагдаагүй хэвээр');
+  g.play(3, 'a', 'e', 'a');
+  assert.equal(g.e.roundStatus('t').championId, 'a');
+  // 4 бөх, devjee 3 даваа зарласан ч 2-оор дууссан: ганц ялагдаагүй → аварга
+  const x = mk(4, 3);
+  x.play(1, 'a', 'b', 'a');
+  x.play(1, 'c', 'd', 'c');
+  x.play(2, 'a', 'c', 'c');
+  assert.equal(x.e.roundStatus('t').championId, 'c');
 });

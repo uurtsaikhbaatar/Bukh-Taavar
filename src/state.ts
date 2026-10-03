@@ -126,8 +126,10 @@ export function apply(state: State, e: BukhEvent): void {
       // games/lastBoutAt өгөгдөөгүй бол өмнөх утгыг хадгална (зөвхөн рейтинг шинэчлэх үйл явдал)
       const games = e.games ?? prev?.games;
       const lastBoutAt = e.lastBoutAt ?? prev?.lastBoutAt;
+      const fast = e.fast ?? prev?.fast;
       if (games !== undefined) entry.games = games;
       if (lastBoutAt !== undefined) entry.lastBoutAt = lastBoutAt;
+      if (fast !== undefined) entry.fast = fast;
       state.ratings.set(e.wrestlerId, entry);
       break;
     }
@@ -153,7 +155,10 @@ export function apply(state: State, e: BukhEvent): void {
       // Бодит барилдаан (гоц биш → ratingUpdates-тэй): туршлага +1, сүүлийн барилдааны огноо
       for (const u of e.ratingUpdates) {
         const prev = state.ratings.get(u.wrestlerId);
-        state.ratings.set(u.wrestlerId, { rating: u.rating, source: u.source, asOf: u.asOf, games: (prev?.games ?? 0) + 1, lastBoutAt: e.at });
+        const entry: RatingEntry = { rating: u.rating, source: u.source, asOf: u.asOf, games: (prev?.games ?? 0) + 1, lastBoutAt: e.at };
+        const fast = u.fast ?? prev?.fast;
+        if (fast !== undefined) entry.fast = fast;
+        state.ratings.set(u.wrestlerId, entry);
       }
       break;
     }

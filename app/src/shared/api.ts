@@ -399,6 +399,8 @@ export interface DevjeeSyncStatusDto {
   wrestlers: number;
   bouts: number;
   resolved: number;
+  /** Хүрээний дүрмийн зөрчил (32-оос цөөн бөх / 5-аас цөөн даваа) — аварга тооцохгүй. */
+  warning?: string;
 }
 
 /** Тэмцээний Монте-Карло прогноз. */

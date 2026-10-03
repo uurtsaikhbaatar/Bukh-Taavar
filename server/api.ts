@@ -166,7 +166,7 @@ export function createRouter(deps: ApiDeps): Router {
       round: b.round,
       a: wrestlerDto(engine.wrestler(b.aId)),
       b: wrestlerDto(engine.wrestler(b.bId)),
-      ...(admin ? { priorA: engine.priorForBout(b.aId, b.bId).pA } : {}),
+      ...(admin ? { priorA: engine.priorForBout(b.aId, b.bId, engine.boutContext(b)).pA } : {}),
     };
     if (b.result) dto.winnerId = b.result.winnerId;
     if (b.scheduledAt) dto.scheduledAt = b.scheduledAt;
@@ -177,7 +177,7 @@ export function createRouter(deps: ApiDeps): Router {
     if (m.kind === 'bout' && m.boutId) {
       const b = engine.state.bouts.get(m.boutId);
       if (b && m.outcomeRefs[0] === b.aId && m.outcomeRefs[1] === b.bId) {
-        const p = engine.priorForBout(b.aId, b.bId);
+        const p = engine.priorForBout(b.aId, b.bId, engine.boutContext(b));
         return [p.pA, p.pB];
       }
     }
@@ -295,7 +295,7 @@ export function createRouter(deps: ApiDeps): Router {
       .filter((b) => b.round === r)
       .map((b): BoardBoutDto => {
         const m = marketByBout.get(b.id);
-        const prior = admin ? engine.priorForBout(b.aId, b.bId) : undefined;
+        const prior = admin ? engine.priorForBout(b.aId, b.bId, engine.boutContext(b)) : undefined;
         const row: BoardBoutDto = {
           id: b.id,
           round: b.round,
@@ -392,7 +392,7 @@ export function createRouter(deps: ApiDeps): Router {
     const bouts: TotoDto['bouts'] = t.boutIds.map((id) => {
       const b = engine.bout(id);
       const row: TotoDto['bouts'][number] = { boutId: b.id, round: b.round, a: brief(b.aId), b: brief(b.bId) };
-      if (admin) row.priorA = engine.priorForBout(b.aId, b.bId).pA;
+      if (admin) row.priorA = engine.priorForBout(b.aId, b.bId, engine.boutContext(b)).pA;
       if (b.result) row.winnerId = b.result.winnerId;
       return row;
     });
@@ -1062,6 +1062,11 @@ export function createRouter(deps: ApiDeps): Router {
     candidates.sort((a, b) => engine.rating(b.id).rating - engine.rating(a.id).rating);
     const entrants = candidates.slice(0, size).map((w) => w.id);
     if (entrants.length < 2) throw new HttpError(400, `Шалгуурт нийцэх бөх хүрэлцэхгүй (${entrants.length}).`, 'NO_ENTRANTS');
+    // Монгол бөх: бүртгэл яг 32/64/…/1024, даваа = log2(бүртгэл) — эс бөгөөс эхлүүлж болохгүй
+    const sizes = engine.bracketSizes();
+    if (sizes.length && (!sizes.includes(entrants.length) || 2 ** rounds !== entrants.length)) {
+      throw new HttpError(400, `Бүртгэл ${entrants.length} бөх, ${rounds} даваа — тэмцээн ${sizes.join(', ')} бөхтэй (даваа = log2) байх ёстой${entrants.length < size ? ` (шалгуурт ${candidates.length} бөх л нийцэв)` : ''}.`, 'BAD_BRACKET');
+    }
     const t = engine.createTournament({ name, date, rounds, kind: 'туршилт', entrants });
     await persist();
     changed();

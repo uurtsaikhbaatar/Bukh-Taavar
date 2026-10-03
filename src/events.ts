@@ -70,6 +70,8 @@ export interface RatingSet extends Base {
   games?: number;
   /** Сүүлд барилдсан огноо — өгөхгүй бол өмнөх утга хадгалагдана. */
   lastBoutAt?: string;
+  /** Таамгийн (хурдан) рейтинг — өгөхгүй бол өмнөх утга хадгалагдана. */
+  fast?: number;
 }
 
 export interface TournamentCreated extends Base {
@@ -92,8 +94,8 @@ export interface BoutResultRecorded extends Base {
   type: 'bout_result';
   boutId: BoutId;
   winnerId: WrestlerId;
-  /** Elo шинэчлэлт (байвал) — reducer шууд хэрэгжүүлнэ. */
-  ratingUpdates: { wrestlerId: WrestlerId; rating: number; source: RatingSource; asOf: string }[];
+  /** Elo шинэчлэлт (байвал) — reducer шууд хэрэгжүүлнэ. `fast` = таамгийн рейтинг (хуучин үйл явдалд байхгүй). */
+  ratingUpdates: { wrestlerId: WrestlerId; rating: number; source: RatingSource; asOf: string; fast?: number }[];
 }
 
 export interface MarketCreated extends Base {

@@ -16,6 +16,7 @@
     "calibrate": "node scripts/calibrate.ts",
     "archive": "node scripts/devjee-archive.ts",
     "calib": "node scripts/calib-tune.ts",
+    "research": "node --max-old-space-size=4096 scripts/model-research.ts",
     "archive:pack": "node scripts/archive-pack.ts",
     "archive:unpack": "node scripts/archive-pack.ts --unpack",
     "mem": "node --expose-gc scripts/mem-check.ts",

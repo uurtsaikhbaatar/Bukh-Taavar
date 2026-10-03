@@ -7,7 +7,7 @@ import type { ForecastDto, MarketRuleDto } from '../app/src/shared/api.ts';
 import type { MarketRule } from '../src/domain.ts';
 import type { Engine } from '../src/engine.ts';
 import { championTop, forecastTournament, matchupProbs, probChampion, type Forecast } from '../src/forecast.ts';
-import { titleLabel } from '../src/rating.ts';
+import { BIG_TOURNAMENT_KIND, titleLabel } from '../src/rating.ts';
 
 const SIMS = 500;
 
@@ -39,14 +39,12 @@ export class ForecastService {
     const cached = this.cache.get(tournamentId);
     if (cached && cached.key === key && Date.now() - cached.at < 5 * 60_000) return cached.f;
     const f = forecastTournament({
-      entrants: entrantIds.map((id) => {
-        const s = this.engine.predictSide(id);
-        return { id, rating: s.rating, ...(s.games !== undefined ? { games: s.games } : {}), ...(s.daysSinceLast !== undefined ? { daysSinceLast: s.daysSinceLast } : {}) };
-      }),
+      entrants: entrantIds.map((id) => ({ id, ...this.engine.predictSide(id) })),
       rounds: t.rounds,
       known,
       sims: SIMS,
       seed: 20260816,
+      big: t.kind === BIG_TOURNAMENT_KIND,
     });
     this.cache.set(tournamentId, { key, f, at: Date.now() });
     return f;

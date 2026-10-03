@@ -114,37 +114,98 @@ export function winProbability(ratingA: number, ratingB: number): number {
 }
 
 /**
- * Таамгийн калибровк (2026-09-06, `scripts/calib-tune.ts`): архивын 246 845 барилдааныг
- * он цагаар гүйж (look-ahead хаалттай), 2023 хүртэлхээр сургаад 2024/2025/2026 дээр
- * шалгасан logistic — log-loss 0.5186 → 0.5044 (жил бүрд Elo-гоос сайн). Жинг бүх
- * өгөгдлөөр дахин тохируулсан. Онцлогууд:
- *   z = DR·(Δрейтинг/400) + EXP·ln((1+g_A)/(1+g_B)) + REST·ln((1+d_A)/(1+d_B))
- * g = өмнөх барилдааны тоо (туршлага давуу), d = сүүлд барилдснаас хойшх хоног
- * (≤3 жил; удаан завсарласан нь сул). Мэдээлэл дутуу талыг тэнцүү гэж үзнэ.
+ * Таамгийн загвар (2026-10-03, `scripts/model-research.ts`): архивын 247 099 барилдааныг
+ * он цагаар гүйж (look-ahead хаалттай), «өнгөрсөн бүх он → дараагийн он» байдлаар
+ * 2023/2024/2025/2026 дээр тус тусад нь шалгасан logistic — log-loss 0.5029 → 0.4920
+ * (он бүрд сайжирсан; өмнөх калибровк 0.5186 → 0.5044-ийн дээр). Жинг бүх өгөгдлөөр
+ * дахин тохируулсан.
+ *
+ *   Δ = (R_A − R_B)/400, R = ТААМГИЙН (хурдан, K=64) рейтинг — devjee-ийн K=32 рейтинг
+ *       таамагт хэт удаан; хурдан рейтинг байхгүй бол үндсэн рейтинг.
+ *   z = (DR + R1·[1-р даваа] + LATE·[4+ даваа] + BIG·[улсын наадам])·Δ
+ *     + EXP·ln((1+g_A)/(1+g_B)) + REST·ln((1+d_A)/(1+d_B))
+ *     + AGE·(нас_A − нас_B)/10 + AGEQ·((нас_A−27)² − (нас_B−27)²)/100
+ *
+ * g = өмнөх барилдааны тоо, d = сүүлд барилдснаас хойшх хоног (≤3 жил). Нас: ижил
+ * рейтингтэй бол залуу нь давуу (рейтинг өсөлтөөс хоцордог). 1-р даваанд фаворит илүү
+ * найдвартай (сонгож авсан хос), хожуу даваанд бага; улсын наадамд илүү. Мэдээлэл
+ * дутуу гишүүнийг тэнцүү гэж үзнэ. Дэлгэцийн рейтинг K=32 (devjee масштаб) хэвээр.
  */
-export const PREDICT_WEIGHTS = { dr: 2.0267, experience: 0.2469, rest: -0.1719 } as const;
+export const PREDICT_WEIGHTS = {
+  dr: 1.5781,
+  round1: 0.1501,
+  late: -0.2018,
+  big: 0.4766,
+  experience: 0.3629,
+  rest: -0.0953,
+  age: -0.4395,
+  ageQ: -0.0382,
+} as const;
 export const REST_CAP_DAYS = 1095;
+/** Таамгийн (хурдан) рейтингийн K — зөвхөн таамагт; дэлгэцийн рейтинг DEFAULT_K. */
+export const FAST_K = 64;
+export const LATE_ROUND = 4;
+export const AGE_PEAK = 27;
+/** devjee-ийн тэмцээний төрөл (TOURNAMENT_TYPES[1]) — таамагт «улсын наадам». */
+export const BIG_TOURNAMENT_KIND = 'Улсын наадам';
 
 export interface PredictSide {
+  /** Үндсэн (дэлгэцийн, K=32) рейтинг. */
   rating: number;
+  /** Таамгийн (хурдан, K=64) рейтинг — байхгүй бол `rating`. */
+  fast?: number;
   /** Өмнөх (бодит) барилдааны тоо. */
   games?: number;
   /** Сүүлд барилдснаас хойшх хоног. */
   daysSinceLast?: number;
+  /** Нас (жилээр). */
+  age?: number;
 }
 
-export function predictProbability(a: PredictSide, b: PredictSide): number {
-  let z = (PREDICT_WEIGHTS.dr * (a.rating - b.rating)) / ELO_SCALE;
+export interface PredictContext {
+  /** Даваа (1-ээс). */
+  round?: number;
+  /** Улсын наадам эсэх. */
+  big?: boolean;
+}
+
+/** Төрсөн огнооноос нас; «1900-01-01» (мэдэгдэхгүйн тэмдэг) ба 14–65-аас гадуурхийг мэдэгдэхгүй гэж үзнэ. */
+export function ageFromBirthDate(birthDate: string | undefined, at: Date | number): number | undefined {
+  if (!birthDate || birthDate.startsWith('1900-01-01')) return undefined;
+  const b = Date.parse(birthDate);
+  if (!Number.isFinite(b)) return undefined;
+  const age = ((typeof at === 'number' ? at : at.getTime()) - b) / (365.25 * 86_400_000);
+  return age >= 14 && age <= 65 ? age : undefined;
+}
+
+export function predictProbability(a: PredictSide, b: PredictSide, ctx: PredictContext = {}): number {
+  const W = PREDICT_WEIGHTS;
+  let slope = W.dr;
+  if (ctx.round === 1) slope += W.round1;
+  else if (ctx.round !== undefined && ctx.round >= LATE_ROUND) slope += W.late;
+  if (ctx.big) slope += W.big;
+  let z = (slope * ((a.fast ?? a.rating) - (b.fast ?? b.rating))) / ELO_SCALE;
   if (a.games !== undefined && b.games !== undefined) {
-    z += PREDICT_WEIGHTS.experience * Math.log((1 + Math.max(0, a.games)) / (1 + Math.max(0, b.games)));
+    z += W.experience * Math.log((1 + Math.max(0, a.games)) / (1 + Math.max(0, b.games)));
   }
   if (a.daysSinceLast !== undefined && b.daysSinceLast !== undefined) {
     const da = Math.min(Math.max(0, a.daysSinceLast), REST_CAP_DAYS);
     const db = Math.min(Math.max(0, b.daysSinceLast), REST_CAP_DAYS);
-    z += PREDICT_WEIGHTS.rest * Math.log((1 + da) / (1 + db));
+    z += W.rest * Math.log((1 + da) / (1 + db));
+  }
+  if (a.age !== undefined && b.age !== undefined) {
+    z += (W.age * (a.age - b.age)) / 10 + (W.ageQ * ((a.age - AGE_PEAK) ** 2 - (b.age - AGE_PEAK) ** 2)) / 100;
   }
   return 1 / (1 + Math.exp(-z));
 }
+
+/**
+ * Монгол бөхийн тэмцээний хүрээ: бүртгэл 32, 64, 128, 256, 512, 1024 (= 5–10 даваа).
+ * Тэмцээн 1-2 бөхөөр хэзээ ч дуусдаггүй — ийм бол бүртгэл/өгөгдөл дутуу (алдаа).
+ */
+export const BRACKET_SIZES = [32, 64, 128, 256, 512, 1024] as const;
+export const MIN_BRACKET = 32;
+export const MIN_BRACKET_ROUNDS = 5;
 
 /**
  * Барилдааны дараах рейтинг: [шинэ А, шинэ Б]. Тэг нийлбэр.
