@@ -114,7 +114,7 @@ test('API: бүртгэл → баталгаажуулалт → админ тэ
     const r1 = await admin.post<{ me: MeDto; token: string; codeSent: boolean }>('/api/register', { username: 'Батцэнгэл', password: 'secret1', email: 'bz@example.com' });
     assert.equal(r1.status, 200);
     assert.equal(r1.body.me.account.role, 'admin', 'эхний бүртгэл админ');
-    assert.equal(r1.body.me.balance, 10_000);
+    assert.equal(r1.body.me.balance, 100_000);
     assert.ok(r1.body.token);
     assert.ok(admin.cookie.startsWith('bukh_session='));
     admin.token = r1.body.token;
@@ -199,12 +199,12 @@ test('API: бүртгэл → баталгаажуулалт → админ тэ
     // Buy (идемпотент requestId)
     const buy1 = await bat.post<TradeResultDto>(`/api/markets/${marketId}/buy`, { outcome: 1, spend: 500, requestId: 'r-1' });
     assert.equal(buy1.status, 200);
-    assert.equal(buy1.body.balance, 9_500);
+    assert.equal(buy1.body.balance, 99_500);
     assert.ok(buy1.body.market.probs[1]! > b.body.market.probs[1]!);
     assert.deepEqual(buy1.body.market.myPosition?.map((x) => Math.round(x)), [0, Math.round(buy1.body.trade.shares)]);
     const buy2 = await bat.post<TradeResultDto>(`/api/markets/${marketId}/buy`, { outcome: 1, spend: 500, requestId: 'r-1' });
     assert.equal(buy2.body.trade.id, buy1.body.trade.id);
-    assert.equal(buy2.body.balance, 9_500, 'давхар төлөгдөөгүй');
+    assert.equal(buy2.body.balance, 99_500, 'давхар төлөгдөөгүй');
     assert.ok(s.flushes >= 1);
 
     // SSE-д changed ирсэн
@@ -229,7 +229,7 @@ test('API: бүртгэл → баталгаажуулалт → админ тэ
     const res = await admin.post<{ resolved: number }>(`/api/admin/bouts/${b.body.bout.id}/result`, { winnerId: 'batmagnai' });
     assert.equal(res.body.resolved, 1);
     const port = await bat.get<PortfolioDto>('/api/portfolio');
-    assert.equal(port.body.balance, 9_500 + sell.body.trade.delta + Math.round(half));
+    assert.equal(port.body.balance, 99_500 + sell.body.trade.delta + Math.round(half));
     assert.equal(port.body.ledger[0]!.kind, 'payout');
     assert.equal(port.body.ledger[0]!.marketTitle, buy1.body.market.title);
 

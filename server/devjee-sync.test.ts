@@ -132,7 +132,7 @@ test('sync: шинэ барилдаан → зах зээл; winner → шийд
   assert.equal(engine.rating('wB').source, 'devjee', 'гоц барилдаанд рейтинг өөрчлөгдөхгүй');
   assert.equal(engine.rating('wD').source, 'local', 'бодит барилдаанд Elo шинэчлэгдсэн');
   // Бат: m1-д 100 → давсан, m2-д 50 буцаалт
-  assert.ok(engine.balance('u1') > 10_000);
+  assert.ok(engine.balance('u1') > 100_000);
   engine.checkInvariants();
 
   // 2-р даваа: танигдаагүй бөх ирвэл татаж нэмнэ; буруу даваа алгасна

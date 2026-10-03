@@ -92,7 +92,7 @@ interface ResolvedOptions {
 }
 
 export const DEFAULTS: Omit<ResolvedOptions, 'now' | 'idGen'> = {
-  startingBalance: 10_000,
+  startingBalance: 100_000,
   defaultB: 2_000,
   minBet: 10,
   maxOutcomes: 64,
