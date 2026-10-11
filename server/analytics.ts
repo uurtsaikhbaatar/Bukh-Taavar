@@ -98,8 +98,10 @@ export class Analytics {
       const lb = this.lastBout.get(wid);
       const elo = this.elo.get(wid);
       if (cur && elo !== undefined && g !== undefined && lb !== undefined && !localOnly.has(w.id)) {
-        // devjee-ээс шууд авсан, архиваас шинэ рейтингийг дарахгүй (importAllWrestlers-тэй ижил дүрэм)
-        const keepRating = cur.source === 'devjee' && cur.asOf >= this.latestDate;
+        // devjee-ээс шууд авсан, архиваас ШИНЭ рейтингийг дарахгүй. Яг ижил огноотойг дарна: өмнөх
+        // тулгалт өөрөө `devjee`/архивын огноогоор бичдэг тул ижил өдөр архив нөхөгдвөл (2026-10-11-нд
+        // 9 тэмцээн нэмэгдсэн) шинэ утга орох ёстой.
+        const keepRating = cur.source === 'devjee' && cur.asOf > this.latestDate;
         const ratingOff = !keepRating && Math.abs(cur.rating - elo) > 0.5;
         const fastOff = cur.fast === undefined || Math.abs(cur.fast - f) > 0.5;
         const metaOff = cur.games !== g || (cur.lastBoutAt ?? '').slice(0, 10) !== lb;
