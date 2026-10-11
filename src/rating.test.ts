@@ -7,6 +7,7 @@ import {
   isTitle,
   PREDICT_WEIGHTS,
   predictProbability,
+  BASE_RATING,
   seedRating,
   titleFromCode,
   titleInfo,
@@ -78,12 +79,18 @@ test('цолын код ↔ цол, суурь рейтинг эрэмбэтэй
   assert.equal(titleInfo('дархан_аварга').short, 'дар.а');
   assert.ok(isTitle('улсын_начин'));
   assert.ok(!isTitle('хаан'));
-  assert.ok(seedRating('дархан_аварга') > seedRating('улсын_арслан'));
-  assert.ok(seedRating('улсын_арслан') > seedRating('улсын_начин'));
-  assert.ok(seedRating('улсын_начин') >= seedRating('аймгийн_арслан'));
-  assert.ok(seedRating('аймгийн_начин') > seedRating('сумын_заан'));
-  assert.ok(seedRating('сумын_заан') > seedRating('залуу_бөх'));
-  assert.ok(seedRating('залуу_бөх') > seedRating('цолгүй'));
+  // Суурь = архивын Elo-гийн эхлэл (1300); зөвхөн цэргийн/аймаг/улсын цолтой шинэ бөхөд нэмэгдэл
+  assert.equal(BASE_RATING, 1300);
+  assert.equal(seedRating('цолгүй'), 1300);
+  assert.equal(seedRating('залуу_бөх'), 1300);
+  assert.equal(seedRating('сумын_заан'), 1300);
+  assert.equal(seedRating('цэргийн_начин'), 1420);
+  assert.equal(seedRating('аймгийн_начин'), 1450);
+  assert.equal(seedRating('дархан_аварга'), 1450);
+  for (let i = 1; i < TITLES.length; i++) {
+    // түвшин өсөхөд суурь буурахгүй (цэргийн 5–8 ба аймгийн 9–12 зэрэгцээ шатлал)
+    if (TITLES[i]!.level === TITLES[i - 1]!.level) assert.equal(TITLES[i]!.seed, TITLES[i - 1]!.seed);
+  }
   assert.ok(titleRank('улсын_гарьд') > titleRank('улсын_заан'));
   // Улсын цолтны кодууд devjee-тэй ижил дараалалтай
   const uls = TITLES.filter((t) => t.level === 'uls').map((t) => t.code);

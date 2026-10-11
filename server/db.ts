@@ -8,6 +8,17 @@
  * дараалалд аваад, HTTP хариу өгөхөөс өмнө `flush()`-ээр багцаар INSERT хийнэ.
  * flush бүтэлгүйтвэл дуудагч (api.ts) процессыг зогсооно — төлөв Postgres
  * логоос дахин босно (санах ойн төлөв логоос түрүүлж болохгүй).
+ *
+ * ГАНЦ БИЧИГЧ (fencing): лог нь санах ойн төлөвийн үргэлжлэл тул хоёр процесс зэрэг бичвэл
+ * (deploy-ийн үед хуучин ба шинэ instance 15–20 сек зэрэг амьд; сервер ажиллаж байхад admin-cli)
+ * тус бүр нөгөөгийнхөө үйл явдлыг мэдэлгүй бичиж, дараагийн эхлэлд лог «зөрчилтэй» болж сервер
+ * босохгүй байх эрсдэлтэй. Хамгаалалт: `log_writer` хүснэгтийн ганц мөр дэх `epoch`.
+ *   - Бичигч эхлэхдээ epoch-ийг +1 болгож АВНА (claim), ДАРАА нь логийг уншина;
+ *   - flush бүр гүйлгээн дотроо тэр мөрийг `FOR UPDATE` түгжиж epoch-оо шалгана: өөр болсон
+ *     бол юу ч бичихгүй, `WriterFencedError` шиднэ (хамгийн сүүлд эхэлсэн бичигч ялна).
+ * Мөрийн түгжээ нь flush ба claim-ийг дараалуулдаг тул «уншсаны дараа хуучин бичигч нэмж бичих»
+ * цонх байхгүй. Session advisory lock биш — Neon-ы pooler (transaction mode) дээр найдвартай
+ * ажиллахгүй; тогтмол асуулга ч биш — DB-г унтуулахгүй байлгаж compute квот шатаана.
  */
 
 import pg from 'pg';
@@ -49,6 +60,14 @@ export const SCHEMA_SQL = `
     payload  JSONB NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS log_writer (
+    id         INTEGER PRIMARY KEY CHECK (id = 1),
+    epoch      BIGINT NOT NULL,
+    owner      TEXT NOT NULL DEFAULT '',
+    claimed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  );
+  INSERT INTO log_writer (id, epoch) VALUES (1, 0) ON CONFLICT (id) DO NOTHING;
+
   CREATE TABLE IF NOT EXISTS users (
     id             TEXT PRIMARY KEY,
     username       TEXT NOT NULL,
@@ -80,8 +99,39 @@ export const SCHEMA_SQL = `
   );
 `;
 
-export async function initSchema(p: pg.Pool = getPool()): Promise<void> {
+export async function initSchema(p: LogDb = getPool()): Promise<void> {
   await p.query(SCHEMA_SQL);
+}
+
+/** PostgresLog-д хэрэгтэй хамгийн бага DB интерфэйс — `pg.Pool` хангана (тестэд PGlite). */
+export interface LogDbClient {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  query(text: string, params?: unknown[]): Promise<{ rows: any[] }>;
+  release(): void;
+}
+export interface LogDb {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  query(text: string, params?: unknown[]): Promise<{ rows: any[] }>;
+  connect(): Promise<LogDbClient>;
+}
+
+/** Бичих эрх өөр (шинэ) бичигчид шилжсэн — энэ процесс цаашид лог руу бичиж чадахгүй. */
+export class WriterFencedError extends Error {
+  readonly code = 'FENCED';
+  /** Эрхийг авсан бичигч (`server:…`, `cli:…`). */
+  readonly owner: string;
+  constructor(owner: string) {
+    super(`Логийн бичих эрх өөр процесст шилжсэн (${owner || 'тодорхойгүй'}).`);
+    this.owner = owner;
+  }
+}
+
+/** Хойшлуулсан эрх авалт (CLI): уншсанаас хойш лог өөрчлөгдсөн тул хуучирсан төлөв дээр бичихгүй. */
+export class LogMovedError extends Error {
+  readonly code = 'LOG_MOVED';
+  constructor() {
+    super('Уншсанаас хойш логт шинэ үйл явдал нэмэгдсэн — командыг дахин ажиллуулна уу.');
+  }
 }
 
 // ───────────────────────── үйл явдлын лог ─────────────────────────
@@ -95,26 +145,62 @@ interface EventRow {
   payload: unknown;
 }
 
+export interface PostgresLogOptions {
+  /** Бичигчийн нэр: `server:<instance>` / `cli:<команд>` — хэн эрхийг авсныг ялгахад. */
+  owner?: string;
+  /**
+   * true (анхдагч): эхлэхдээ бичих эрхийг шууд авна — урт ажилладаг сервер.
+   * false: эрхийг анхны flush хүртэл хойшлуулна (admin-cli): зөвхөн уншдаг команд серверийг
+   * бичих эрхгүй болгохгүй; бичих үедээ уншсанаас хойш лог өөрчлөгдөөгүйг шалгана.
+   */
+  claim?: boolean;
+}
+
+const CLAIM_SQL = 'UPDATE log_writer SET epoch = epoch + 1, owner = $1, claimed_at = now() WHERE id = 1 RETURNING epoch';
+
 export class PostgresLog implements FlushableLog {
-  private readonly pool: pg.Pool;
+  private readonly pool: LogDb;
   private readonly loaded: BukhEvent[];
+  private readonly owner: string;
   private queue: BukhEvent[] = [];
   private inflight: Promise<void> = Promise.resolve();
+  /** Миний бичих эрхийн дугаар; undefined = хараахан аваагүй (хойшлуулсан). */
+  private epoch: number | undefined;
+  /** Уншсан агшны хамгийн их seq — хойшлуулсан эрх авалтад «лог хөдлөөгүй»-г шалгана. */
+  private readonly seqAtLoad: number;
+  private fencedOwner: string | undefined;
+  /** Бичих эрхээ алдсаныг анх мэдэх үед нэг удаа дуудагдана. */
+  onFenced: ((owner: string) => void) | undefined;
 
-  private constructor(pool: pg.Pool, loaded: BukhEvent[]) {
+  private constructor(pool: LogDb, loaded: BukhEvent[], owner: string, epoch: number | undefined, seqAtLoad: number) {
     this.pool = pool;
     this.loaded = loaded;
+    this.owner = owner;
+    this.epoch = epoch;
+    this.seqAtLoad = seqAtLoad;
   }
 
-  /** Бүх үйл явдлыг seq дарааллаар урьдчилан уншиж, логийг бэлдэнэ. */
-  static async load(p: pg.Pool = getPool()): Promise<PostgresLog> {
-    const res = await p.query<EventRow>('SELECT payload FROM events ORDER BY seq');
+  /**
+   * Бичих эрхийг авч (claim), ДАРАА нь бүх үйл явдлыг seq дарааллаар уншина. Дараалал чухал:
+   * эрхээ авсны дараа өмнөх бичигчийн flush бүтэлгүйтэх тул уншсан лог бол эцсийн лог.
+   */
+  static async load(p: LogDb = getPool(), options: PostgresLogOptions = {}): Promise<PostgresLog> {
+    const owner = options.owner ?? `proc:${process.pid}`;
+    let epoch: number | undefined;
+    if (options.claim ?? true) {
+      const c = await p.query(CLAIM_SQL, [owner]);
+      if (!c.rows[0]) throw new Error('log_writer мөр алга — initSchema ажиллуулаагүй байна.');
+      epoch = Number(c.rows[0].epoch);
+    }
+    const res = await p.query('SELECT seq, payload FROM events ORDER BY seq');
     const events: BukhEvent[] = [];
-    for (const row of res.rows) {
+    let seq = 0;
+    for (const row of res.rows as (EventRow & { seq: string | number | bigint })[]) {
       if (!isBukhEvent(row.payload)) throw new Error('events хүснэгтэд танигдаагүй бичлэг байна.');
       events.push(row.payload);
+      seq = Number(row.seq);
     }
-    return new PostgresLog(p, events);
+    return new PostgresLog(p, events, owner, epoch, seq);
   }
 
   readAll(): BukhEvent[] {
@@ -122,6 +208,8 @@ export class PostgresLog implements FlushableLog {
   }
 
   append(event: BukhEvent): void {
+    // Эрхээ алдсан процесс юу ч дараалалд авахгүй — чимээгүй «амжилттай» мэт харагдуулахгүй
+    if (this.fencedOwner !== undefined) throw new WriterFencedError(this.fencedOwner);
     this.queue.push(structuredClone(event));
   }
 
@@ -129,15 +217,59 @@ export class PostgresLog implements FlushableLog {
     return this.queue.length;
   }
 
+  /** Бичих эрхийн дугаар (хараахан аваагүй бол undefined). */
+  get writerEpoch(): number | undefined {
+    return this.epoch;
+  }
+
+  /** Бичих эрхээ өөр бичигчид алдсан эсэх. */
+  get fenced(): boolean {
+    return this.fencedOwner !== undefined;
+  }
+
+  private fence(owner: string): WriterFencedError {
+    const first = this.fencedOwner === undefined;
+    this.fencedOwner = owner;
+    this.queue = [];
+    if (first && this.onFenced) {
+      try {
+        this.onFenced(owner);
+      } catch {
+        // мэдэгдлийн алдаа логийн төлөвт нөлөөлөхгүй
+      }
+    }
+    return new WriterFencedError(owner);
+  }
+
   /** Дараалалд буй үйл явдлуудыг нэг гүйлгээгээр бичнэ (дараалсан, зэрэгцээ биш). */
   flush(): Promise<void> {
     const run = this.inflight.then(async () => {
+      if (this.fencedOwner !== undefined) throw new WriterFencedError(this.fencedOwner);
       if (this.queue.length === 0) return;
       const batch = this.queue;
       this.queue = [];
       const client = await this.pool.connect();
+      let claimed: number | undefined;
       try {
         await client.query('BEGIN');
+        if (this.epoch === undefined) {
+          // Хойшлуулсан эрх авалт (UPDATE нь мөрийг түгжинэ) + уншсанаас хойш лог хөдлөөгүйг шалгана
+          const c = await client.query(CLAIM_SQL, [this.owner]);
+          const m = await client.query('SELECT COALESCE(max(seq), 0) AS seq FROM events');
+          if (!c.rows[0] || Number(m.rows[0]?.seq) !== this.seqAtLoad) {
+            await client.query('ROLLBACK');
+            this.queue = [];
+            throw new LogMovedError();
+          }
+          claimed = Number(c.rows[0].epoch);
+        } else {
+          // Мөрийн түгжээ flush ба шинэ бичигчийн claim-ийг дараалуулна
+          const w = await client.query('SELECT epoch, owner FROM log_writer WHERE id = 1 FOR UPDATE');
+          if (Number(w.rows[0]?.epoch) !== this.epoch) {
+            await client.query('ROLLBACK');
+            throw this.fence(String(w.rows[0]?.owner ?? ''));
+          }
+        }
         // Олон мөрийг нэг INSERT-ээр (500 мөр = 2 000 параметр): 46к үйл явдлын импорт, 1024 бөхийн
         // даваа эхлэх зэрэг том багц Neon руу секундэд багтана (мөр бүрд тусдаа гүйлгээ бол минутууд).
         const CHUNK = 500;
@@ -152,8 +284,10 @@ export class PostgresLog implements FlushableLog {
           await client.query(`INSERT INTO events (id, at, type, payload) VALUES ${marks.join(', ')}`, values);
         }
         await client.query('COMMIT');
+        if (claimed !== undefined) this.epoch = claimed;
         this.loaded.push(...batch);
       } catch (err) {
+        if (err instanceof WriterFencedError || err instanceof LogMovedError) throw err; // багц хаягдсан
         await client.query('ROLLBACK').catch(() => undefined);
         // Бичигдээгүй үйл явдлуудыг буцааж дараалалд тавина — дуудагч зогсоох эсэхээ шийднэ.
         this.queue = [...batch, ...this.queue];

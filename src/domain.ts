@@ -78,6 +78,21 @@ export interface RatingEntry {
   fast?: number;
 }
 
+/**
+ * Давааны хэлбэр: `knockout` — шигшээ (унасан бөх хасагдана, Монгол бөхийн ердийн хүрээ);
+ * `round-robin` — тойргийн (бүгд бүгдтэйгээ); `team` — багийн (баг багтайгаа).
+ */
+export type RoundFormat = 'knockout' | 'round-robin' | 'team';
+
+/** Шигшээ биш даваа (devjee-ийн «даваа» нь насны ангилал, багийн үе байж болдог). */
+export interface RoundInfo {
+  format: RoundFormat;
+  /** devjee дээрх нэр: «15 нас», «Монгол үндэсний бөх». */
+  name?: string;
+  /** Монгол үндэсний бөх БИШ (өвөрмонгол г.м) — таавар нээхгүй, рейтингт тооцохгүй. */
+  otherStyle?: boolean;
+}
+
 export interface Tournament {
   id: TournamentId;
   name: string;
@@ -85,6 +100,8 @@ export interface Tournament {
   date: string;
   /** Давааны тоо (Наадам 9 эсвэл 10). */
   rounds: number;
+  /** Шигшээ биш эсвэл нэртэй даваанууд (түлхүүр = давааны дугаар); байхгүй даваа = шигшээ. */
+  roundInfo?: Record<string, RoundInfo>;
   devjeeId?: string;
   /** Төрөл: "улсын_наадам", "аймгийн_наадам", … (чөлөөт текст). */
   kind?: string;
@@ -110,6 +127,11 @@ export interface Bout {
   scheduledAt?: string;
   result?: BoutResult;
   devjeeMatchId?: string;
+  /**
+   * Цуцлагдсан (хослол өөрчлөгдсөн, devjee-ээс устсан) — бичлэг нь түүхэнд үлдэх боловч
+   * тэмцээний явц, тото, жагсаалтад тооцогдохгүй. Үр дүнтэй барилдаан цуцлагдахгүй.
+   */
+  cancelled?: { at: string; reason: string };
 }
 
 export type MarketKind = 'bout' | 'custom';

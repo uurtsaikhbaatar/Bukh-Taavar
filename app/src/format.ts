@@ -27,6 +27,16 @@ export function fmtWhen(iso: string): string {
   }
 }
 
+/** Давааны нэр: devjee дээр нэртэй / шигшээ биш даваа бол тэр нэр («15 нас»), үгүй бол «N-р даваа». */
+export function roundName(round: number, labels?: Record<string, string>): string {
+  return labels?.[String(round)] ?? `${round}-р даваа`;
+}
+
+/** Шигшээ биш тэмцээний хэлбэрийн нэр. */
+export function formatName(format: 'round-robin' | 'team'): string {
+  return format === 'team' ? 'багийн барилдаан' : 'тойргийн барилдаан';
+}
+
 /** ISO → "5 секундын өмнө" / "35 минутын өмнө" / "3 цагийн өмнө" / "2 хоногийн өмнө". */
 export function fmtAgo(iso: string, now: number = Date.now()): string {
   const t = new Date(iso).getTime();

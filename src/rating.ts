@@ -1,14 +1,21 @@
 /**
  * Рейтинг: Elo (K = 32, 400 масштаб — devjee.mn-ийн системтэй ижил) ба
- * цолын суурь рейтинг (devjee рейтинг мэдэгдэхгүй бөхөд анхны утга).
+ * түүхгүй бөхийн суурь рейтинг.
  *
  * Цолын код 1–21 нь devjee.mn-ийн кодтой ижил (0 = цолгүй, манайх).
- * Суурь рейтингүүд нь devjee-ийн 2026-07 топ-500 тархалтаас гаргасан бүдүүвч
- * тооцоо — тохируулж болно; бодит бөхөд devjee рейтинг үргэлж давуу.
+ *
+ * Суурь рейтинг (2026-10-11): архивын Elo бүх бөхийг 1300-аас эхлүүлдэг, таамгийн загвар
+ * ч тэгж сурсан. Өмнө нь түүхгүй бөхөд цолоор 1450–2300 өгдөг байсан нь devjee-ийн
+ * топ-500-ийн тархалтаас авсан бүдүүвч тоо — архивт анх удаа барилдсан 20 484 барилдаан
+ * дээр (2022–2026, «өмнөх онууд → дараагийн он») log-loss 0.381, тогтмол 1300 нь 0.343.
+ * Цолоор нарийвчлах нь зөвхөн цэргийн/аймгийн цолтой шинэ бөхөд тогтвортой ашигтай
+ * (+120…+160; тэд 36–42% давдаг, цолгүй шинэ бөх 9%) — тэр хэсгийг л үлдээв.
  */
 
 export const DEFAULT_K = 32;
 export const ELO_SCALE = 400;
+/** Түүхгүй бөхийн суурь рейтинг = архивын Elo-гийн эхлэл (devjee масштаб). */
+export const BASE_RATING = 1300;
 
 export type TitleLevel = 'none' | 'sum' | 'tsereg' | 'aimag' | 'uls';
 
@@ -47,28 +54,28 @@ export type Title =
   | 'дархан_аварга';
 
 export const TITLES: readonly TitleInfo[] = [
-  { code: 0, key: 'цолгүй', label: 'Цолгүй', short: '', level: 'none', seed: 1450 },
-  { code: 1, key: 'залуу_бөх', label: 'Залуу бөх', short: 'з.б', level: 'sum', seed: 1500 },
-  { code: 2, key: 'сумын_начин', label: 'Сумын начин', short: 'с.н', level: 'sum', seed: 1550 },
-  { code: 3, key: 'сумын_харцага', label: 'Сумын харцага', short: 'с.х', level: 'sum', seed: 1600 },
-  { code: 4, key: 'сумын_заан', label: 'Сумын заан', short: 'с.з', level: 'sum', seed: 1650 },
-  { code: 5, key: 'цэргийн_начин', label: 'Цэргийн начин', short: 'ц.н', level: 'tsereg', seed: 1800 },
-  { code: 6, key: 'цэргийн_харцага', label: 'Цэргийн харцага', short: 'ц.х', level: 'tsereg', seed: 1850 },
-  { code: 7, key: 'цэргийн_заан', label: 'Цэргийн заан', short: 'ц.з', level: 'tsereg', seed: 1900 },
-  { code: 8, key: 'цэргийн_арслан', label: 'Цэргийн арслан', short: 'ц.а', level: 'tsereg', seed: 1950 },
-  { code: 9, key: 'аймгийн_начин', label: 'Аймгийн начин', short: 'а.н', level: 'aimag', seed: 1800 },
-  { code: 10, key: 'аймгийн_харцага', label: 'Аймгийн харцага', short: 'а.х', level: 'aimag', seed: 1850 },
-  { code: 11, key: 'аймгийн_заан', label: 'Аймгийн заан', short: 'а.з', level: 'aimag', seed: 1900 },
-  { code: 12, key: 'аймгийн_арслан', label: 'Аймгийн арслан', short: 'а.а', level: 'aimag', seed: 1950 },
-  { code: 13, key: 'улсын_начин', label: 'Улсын начин', short: 'у.н', level: 'uls', seed: 1950 },
-  { code: 14, key: 'улсын_харцага', label: 'Улсын харцага', short: 'у.х', level: 'uls', seed: 2000 },
-  { code: 15, key: 'улсын_заан', label: 'Улсын заан', short: 'у.з', level: 'uls', seed: 2050 },
-  { code: 16, key: 'улсын_гарьд', label: 'Улсын гарьд', short: 'у.г', level: 'uls', seed: 2100 },
-  { code: 17, key: 'улсын_арслан', label: 'Улсын арслан', short: 'у.ар', level: 'uls', seed: 2150 },
-  { code: 18, key: 'улсын_аварга', label: 'Улсын аварга', short: 'у.ав', level: 'uls', seed: 2200 },
-  { code: 19, key: 'далай_аварга', label: 'Далай аварга', short: 'дал.а', level: 'uls', seed: 2300 },
-  { code: 20, key: 'даян_аварга', label: 'Даян аварга', short: 'дая.а', level: 'uls', seed: 2300 },
-  { code: 21, key: 'дархан_аварга', label: 'Дархан аварга', short: 'дар.а', level: 'uls', seed: 2300 },
+  { code: 0, key: 'цолгүй', label: 'Цолгүй', short: '', level: 'none', seed: 1300 },
+  { code: 1, key: 'залуу_бөх', label: 'Залуу бөх', short: 'з.б', level: 'sum', seed: 1300 },
+  { code: 2, key: 'сумын_начин', label: 'Сумын начин', short: 'с.н', level: 'sum', seed: 1300 },
+  { code: 3, key: 'сумын_харцага', label: 'Сумын харцага', short: 'с.х', level: 'sum', seed: 1300 },
+  { code: 4, key: 'сумын_заан', label: 'Сумын заан', short: 'с.з', level: 'sum', seed: 1300 },
+  { code: 5, key: 'цэргийн_начин', label: 'Цэргийн начин', short: 'ц.н', level: 'tsereg', seed: 1420 },
+  { code: 6, key: 'цэргийн_харцага', label: 'Цэргийн харцага', short: 'ц.х', level: 'tsereg', seed: 1420 },
+  { code: 7, key: 'цэргийн_заан', label: 'Цэргийн заан', short: 'ц.з', level: 'tsereg', seed: 1420 },
+  { code: 8, key: 'цэргийн_арслан', label: 'Цэргийн арслан', short: 'ц.а', level: 'tsereg', seed: 1420 },
+  { code: 9, key: 'аймгийн_начин', label: 'Аймгийн начин', short: 'а.н', level: 'aimag', seed: 1450 },
+  { code: 10, key: 'аймгийн_харцага', label: 'Аймгийн харцага', short: 'а.х', level: 'aimag', seed: 1450 },
+  { code: 11, key: 'аймгийн_заан', label: 'Аймгийн заан', short: 'а.з', level: 'aimag', seed: 1450 },
+  { code: 12, key: 'аймгийн_арслан', label: 'Аймгийн арслан', short: 'а.а', level: 'aimag', seed: 1450 },
+  { code: 13, key: 'улсын_начин', label: 'Улсын начин', short: 'у.н', level: 'uls', seed: 1450 },
+  { code: 14, key: 'улсын_харцага', label: 'Улсын харцага', short: 'у.х', level: 'uls', seed: 1450 },
+  { code: 15, key: 'улсын_заан', label: 'Улсын заан', short: 'у.з', level: 'uls', seed: 1450 },
+  { code: 16, key: 'улсын_гарьд', label: 'Улсын гарьд', short: 'у.г', level: 'uls', seed: 1450 },
+  { code: 17, key: 'улсын_арслан', label: 'Улсын арслан', short: 'у.ар', level: 'uls', seed: 1450 },
+  { code: 18, key: 'улсын_аварга', label: 'Улсын аварга', short: 'у.ав', level: 'uls', seed: 1450 },
+  { code: 19, key: 'далай_аварга', label: 'Далай аварга', short: 'дал.а', level: 'uls', seed: 1450 },
+  { code: 20, key: 'даян_аварга', label: 'Даян аварга', short: 'дая.а', level: 'uls', seed: 1450 },
+  { code: 21, key: 'дархан_аварга', label: 'Дархан аварга', short: 'дар.а', level: 'uls', seed: 1450 },
 ];
 
 const BY_KEY = new Map<string, TitleInfo>(TITLES.map((t) => [t.key, t]));
@@ -100,7 +107,7 @@ export function titleRank(title: Title): number {
   return titleInfo(title).code;
 }
 
-/** Рейтинг мэдэгдэхгүй бөхийн анхны (суурь) рейтинг — цолоор. */
+/** Архивт түүхгүй бөхийн суурь рейтинг: 1300; цэргийн цолтой 1420, аймаг/улсын цолтой 1450. */
 export function seedRating(title: Title): number {
   return titleInfo(title).seed;
 }
@@ -130,16 +137,20 @@ export function winProbability(ratingA: number, ratingB: number): number {
  * рейтингтэй бол залуу нь давуу (рейтинг өсөлтөөс хоцордог). 1-р даваанд фаворит илүү
  * найдвартай (сонгож авсан хос), хожуу даваанд бага; улсын наадамд илүү. Мэдээлэл
  * дутуу гишүүнийг тэнцүү гэж үзнэ. Дэлгэцийн рейтинг K=32 (devjee масштаб) хэвээр.
+ *
+ * 2026-10-11: давааны гишүүд (R1, LATE) зөвхөн ШИГШЭЭ даваанд — тойргийн/багийн «даваа» нь
+ * насны ангилал, үе (архивт 3 771 ийм барилдаан). Жинг 248 530 барилдаанаар дахин тохируулсан;
+ * дөрвөн оны дундаж log-loss 0.4923 (хуучин тодорхойлолтоор 0.4920 — ялгаагүй).
  */
 export const PREDICT_WEIGHTS = {
-  dr: 1.5781,
-  round1: 0.1501,
-  late: -0.2018,
-  big: 0.4766,
-  experience: 0.3629,
-  rest: -0.0953,
-  age: -0.4395,
-  ageQ: -0.0382,
+  dr: 1.5724,
+  round1: 0.1742,
+  late: -0.1941,
+  big: 0.4755,
+  experience: 0.3617,
+  rest: -0.0958,
+  age: -0.4387,
+  ageQ: -0.0381,
 } as const;
 export const REST_CAP_DAYS = 1095;
 /** Таамгийн (хурдан) рейтингийн K — зөвхөн таамагт; дэлгэцийн рейтинг DEFAULT_K. */
@@ -196,8 +207,18 @@ export function predictProbability(a: PredictSide, b: PredictSide, ctx: PredictC
   if (a.age !== undefined && b.age !== undefined) {
     z += (W.age * (a.age - b.age)) / 10 + (W.ageQ * ((a.age - AGE_PEAK) ** 2 - (b.age - AGE_PEAK) ** 2)) / 100;
   }
-  return 1 / (1 + Math.exp(-z));
+  const p = 1 / (1 + Math.exp(-z));
+  // Аль нэг тал нь анх удаа барилдаж буй бол итгэлийг хязгаарлана (доорх NEWCOMER_CAP)
+  if (a.games === 0 || b.games === 0) return Math.min(NEWCOMER_CAP, Math.max(1 - NEWCOMER_CAP, p));
+  return p;
 }
+
+/**
+ * Түүхгүй бөхтэй барилдааны таамгийн дээд хязгаар. Архивт нэг тал нь анх удаа барилдсан
+ * 6 139 барилдаанд (2022–2026) загвар 99–99.9% гэсэн үед фаворит бодитоор 97.4–98.0% давсан
+ * — мэдэхгүй бөхийн эсрэг 99.9% гэх үндэсгүй. 97.5%-иар хязгаарлахад log-loss 0.3249 → 0.3223.
+ */
+export const NEWCOMER_CAP = 0.975;
 
 /**
  * Монгол бөхийн тэмцээний хүрээ: бүртгэл 32, 64, 128, 256, 512, 1024 (= 5–10 даваа).

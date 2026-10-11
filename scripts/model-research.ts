@@ -39,7 +39,10 @@ const clean = archive.bouts
 const N = clean.length;
 
 // ── Туслах: цол (түүхээс), нас ──
-const seedOf = new Map<Title, number>(TITLES.map((t) => [t.key, t.seed]));
+// «ttl» шинжид цолын шатлал хэрэгтэй (суурь рейтинг биш) — TITLES.seed 2026-10-11-ээс бараг тэгш
+// (1300/1420/1450) болсон тул хуучин шатлалыг энд хадгалав (кодоор 0…21).
+const TITLE_LADDER = [1450, 1500, 1550, 1600, 1650, 1800, 1850, 1900, 1950, 1800, 1850, 1900, 1950, 1950, 2000, 2050, 2100, 2150, 2200, 2300, 2300, 2300];
+const seedOf = new Map<Title, number>(TITLES.map((t) => [t.key, TITLE_LADDER[t.code]!]));
 const NONE_SEED = seedOf.get('цолгүй')!;
 const titleHist = new Map<string, { t: number; seed: number }[]>();
 for (const [wid, w] of Object.entries(archive.wrestlers)) {
@@ -119,8 +122,10 @@ for (let i = 0; i < N; i++) {
   const s2 = titleSeedAt(b.w2, t);
   F.ttl[i] = (s1 - s2) / 400;
   if (s1 !== NONE_SEED || s2 !== NONE_SEED) coverage.ttl += 1;
-  F.drR1[i] = b.round === 1 ? F.dr32[i]! : 0;
-  F.drLate[i] = b.round >= 4 ? F.dr32[i]! : 0;
+  // Давааны шинж шигшээ хүрээнд л утгатай — тойргийн/багийн «даваа» нь насны ангилал, үе
+  const ko = !b.fmt;
+  F.drR1[i] = ko && b.round === 1 ? F.dr32[i]! : 0;
+  F.drLate[i] = ko && b.round >= 4 ? F.dr32[i]! : 0;
   const a1 = ageAt(b.w1, t);
   const a2 = ageAt(b.w2, t);
   if (a1 !== undefined && a2 !== undefined) {
@@ -150,8 +155,8 @@ for (let i = 0; i < N; i++) {
   F.dr80[i] = dr(80);
   F.dr96[i] = dr(96);
   F.dr128[i] = dr(128);
-  F.r1F[i] = b.round === 1 ? F.dr64[i]! : 0;
-  F.lateF[i] = b.round >= 4 ? F.dr64[i]! : 0;
+  F.r1F[i] = ko && b.round === 1 ? F.dr64[i]! : 0;
+  F.lateF[i] = ko && b.round >= 4 ? F.dr64[i]! : 0;
   F.bigF[i] = T?.types?.includes(1) ? F.dr64[i]! : 0;
 
   Y[i] = b.winner === 1 ? 1 : 0;

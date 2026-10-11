@@ -7,11 +7,13 @@
  *
  * Орчны хувьсагч: PORT, DATABASE_URL, EMAIL_PROVIDER/EMAIL_API_KEY/EMAIL_FROM,
  * DEVJEE_FIREBASE_KEY (заавал биш), DEVJEE_DISABLED=1 (devjee холболтгүй),
+ * DEVJEE_AUTO_IMPORT=0 (ойрын тэмцээнийг автоматаар оруулахгүй),
  * SECURE_COOKIES=1 (https-ийн ард), STATIC_DIR (анхдагч app/dist).
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -22,7 +24,7 @@ import { Analytics } from './analytics.ts';
 import { createRouter, devCors } from './api.ts';
 import { MemoryAuthStore, type AuthSnapshot, type AuthStore } from './auth-store.ts';
 import { Auth } from './auth.ts';
-import { closePool, initSchema, PostgresAuthStore, PostgresLog } from './db.ts';
+import { closePool, initSchema, PostgresAuthStore, PostgresLog, WriterFencedError } from './db.ts';
 import { DevjeeSync } from './devjee-sync.ts';
 import { emailProvider } from './email.ts';
 import { SseHub, staticServer } from './http.ts';
@@ -53,9 +55,13 @@ async function main(): Promise<void> {
   let log: EventLog & { flush?: () => Promise<void> };
   let authStore: AuthStore;
   let mode: string;
+  let pgLog: PostgresLog | undefined;
   if (process.env.DATABASE_URL) {
     await initSchema();
-    log = await PostgresLog.load();
+    // Бичих эрхийг авч (өмнөх instance-ийн бичилт зогсоно), дараа нь логийг уншина
+    pgLog = await PostgresLog.load(undefined, { owner: `server:${process.env.RENDER_INSTANCE_ID ?? os.hostname()}:${process.pid}` });
+    log = pgLog;
+    console.log(`[log] бичих эрх #${pgLog.writerEpoch} авлаа`);
     authStore = new PostgresAuthStore();
     mode = 'Postgres';
   } else {
@@ -82,7 +88,25 @@ async function main(): Promise<void> {
         await flush();
         hub.broadcast('changed', { type: 'changed', marketIds: r.marketIds, at: new Date().toISOString() });
       },
+      // devjee-ийн нүүр хуудсанд гарсан ойрын тэмцээнийг өөрөө оруулна (DEVJEE_AUTO_IMPORT=0 бол үгүй)
+      autoImport: process.env.DEVJEE_AUTO_IMPORT !== '0',
+      onImported: async () => {
+        await flush();
+        hub.broadcast('changed', { type: 'changed', at: new Date().toISOString() });
+      },
     });
+  }
+
+  if (pgLog) {
+    // Бичих эрх өөр процесст шилжвэл (шинэ deploy эсвэл admin-cli): зөвхөн уншдаг болж, автомат
+    // sync-ийг зогсооно. Шинэ сервер бол Render удахгүй энэ процессыг унтраана — ачаалал шилжих
+    // хүртэл уншилтад үйлчилнэ; CLI бол хурдан дахин асаж түүний бичсэнийг уншина.
+    pgLog.onFenced = (owner) => {
+      devjee?.stop();
+      const wait = owner.startsWith('server:') ? 45 : 2;
+      console.error(`[log] бичих эрх «${owner}»-д шилжлээ — энэ процесс зөвхөн уншина, ${wait} секундын дараа зогсоно.`);
+      setTimeout(() => process.exit(1), wait * 1000).unref();
+    };
   }
 
   let analytics: Analytics | undefined;
@@ -107,15 +131,29 @@ async function main(): Promise<void> {
     hub,
     secureCookies: process.env.SECURE_COOKIES === '1',
     info: { storage: process.env.DATABASE_URL ? 'postgres' : 'jsonl', email: emailProvider() },
+    // Бичих эрхээ алдсан үеийн flush-ийн алдаа «ноцтой» биш — onFenced зохицуулна
+    onFatal: (err) => {
+      if (err instanceof WriterFencedError) return;
+      console.error('НОЦТОЙ: лог бичиж чадсангүй — процесс зогсоно.', err);
+      setTimeout(() => process.exit(1), 100);
+    },
+    ...(pgLog ? { writer: () => ({ epoch: pgLog.writerEpoch ?? 0, fenced: pgLog.fenced }) } : {}),
     ...(devjee ? { devjee } : {}),
     ...(analytics ? { analytics } : {}),
   });
   const serveStatic = staticServer(STATIC_DIR);
   const isProd = process.env.NODE_ENV === 'production';
 
+  const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
   const server = createServer(async (req, res) => {
     try {
       if (!isProd && devCors(req, res)) return;
+      // Бичих эрхгүй болсон процесс өөрчлөх хүсэлтийг авахгүй (санах ойд л үлдэх «хий» өөрчлөлт үүсгэхгүй)
+      if (pgLog?.fenced && !READ_METHODS.has(req.method ?? 'GET') && (req.url ?? '').startsWith('/api/')) {
+        res.writeHead(503, { 'content-type': 'application/json; charset=utf-8', 'retry-after': '10' });
+        res.end(JSON.stringify({ error: 'Сервер шинэчлэгдэж байна. Хэдэн секундын дараа дахин оролдоно уу.', code: 'READ_ONLY' }));
+        return;
+      }
       if (await router.handle(req, res)) return;
       if ((req.method ?? 'GET') === 'GET' && (await serveStatic(req, res))) return;
       res.writeHead(404, { 'content-type': 'text/html; charset=utf-8' });

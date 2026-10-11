@@ -98,6 +98,13 @@ export interface BoutResultRecorded extends Base {
   ratingUpdates: { wrestlerId: WrestlerId; rating: number; source: RatingSource; asOf: string; fast?: number }[];
 }
 
+/** Барилдаан цуцлагдсан (хослол өөрчлөгдсөн / devjee-ээс устсан) — үр дүнгүй барилдаанд л. */
+export interface BoutCancelled extends Base {
+  type: 'bout_cancelled';
+  boutId: BoutId;
+  reason: string;
+}
+
 export interface MarketCreated extends Base {
   type: 'market_created';
   market: {
@@ -113,6 +120,16 @@ export interface MarketCreated extends Base {
     closesAt?: string;
     rule?: MarketRule;
   };
+}
+
+/**
+ * Арилжаагүй зах зээлийн анхны магадлалыг шинэчилсэн (тойргийн барилдаанд үр дүн орж
+ * рейтинг өөрчлөгдөх бүрд). Зөвхөн нэг ч арилжаагүй, нээлттэй зах зээлд.
+ */
+export interface MarketRepriced extends Base {
+  type: 'market_repriced';
+  marketId: MarketId;
+  q0: number[];
 }
 
 export interface MarketClosed extends Base {
@@ -214,7 +231,9 @@ export type BukhEvent =
   | TournamentUpdated
   | BoutCreated
   | BoutResultRecorded
+  | BoutCancelled
   | MarketCreated
+  | MarketRepriced
   | MarketClosed
   | Trade
   | MarketResolved
@@ -232,7 +251,9 @@ const EVENT_TYPES: ReadonlySet<string> = new Set<EventType>([
   'tournament_updated',
   'bout_created',
   'bout_result',
+  'bout_cancelled',
   'market_created',
+  'market_repriced',
   'market_closed',
   'trade',
   'market_resolved',

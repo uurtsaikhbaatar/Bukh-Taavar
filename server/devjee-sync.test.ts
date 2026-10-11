@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import type { DevjeeStateMatch, DevjeeTournamentState, DevjeeWrestler } from '../src/devjee.ts';
 import { Engine } from '../src/engine.ts';
 import { MemoryLog } from '../src/store.ts';
-import { DevjeeSync, shortName, type DevjeeApi } from './devjee-sync.ts';
+import { declaredRounds, DevjeeSync, shortName, type DevjeeApi } from './devjee-sync.ts';
 
 function fakeApi(state: DevjeeTournamentState) {
   const wrestlers: Record<string, DevjeeWrestler> = {
@@ -354,4 +354,212 @@ test('sync-ийн төлөв: нэр/огноо, devjee дээрх сүүлий�
   assert.equal(sync2.offReason('dj-LIVE'), 'expired');
   sync.stop();
   sync2.stop();
+});
+
+test('declaredRounds: тойргийн/багийн 1-р давааны хосын тооноос даваа «таахгүй»', () => {
+  const rr = baseState();
+  rr.rounds = { '1': { id: 1, type: 'round-robin', _name: 'Барилдаанууд' } };
+  // 8 бөхийн тойрог = 28 барилдаан — шигшээ гэж үзвэл ⌈log2 56⌉ = 6 даваа гэж андуурна
+  let k = 0;
+  for (let i = 0; i < 8; i++) for (let j = i + 1; j < 8; j++) rr.matches[`m${++k}`] = { round: 1, w1: `r${i}`, w2: `r${j}`, winner: 0 } as DevjeeStateMatch;
+  assert.equal(declaredRounds(rr), 1);
+  const ko = baseState();
+  ko.rounds = { '1': { id: 1, type: 'default' } };
+  for (let i = 0; i < 28; i++) ko.matches[`k${i}`] = { round: 1, w1: `a${i}`, w2: `b${i}`, winner: 0 } as DevjeeStateMatch;
+  assert.equal(declaredRounds(ko), 6, 'шигшээ 1-р даваанд 28 хос → 6 даваа');
+});
+
+test('тойргийн ба багийн тэмцээн: давааны хэлбэр/нэр дагана, ⚠ гарахгүй, өвөрмонгол бөхөд таавар/рейтинг үгүй', async () => {
+  const st = baseState();
+  st.rounds = { '1': { id: 1, type: 'team', _name: 'Монгол үндэсний бөх' }, '2': { id: 2, type: 'team', _name: 'Өвөрмонгол бөх' } };
+  st.matches.m1 = { round: 1, w1: 'wA', w2: 'wD', winner: 0 } as DevjeeStateMatch;
+  st.matches.m2 = { round: 2, w1: 'wB', w2: 'wD', winner: 0 } as DevjeeStateMatch;
+  const { api, state } = fakeApi(st);
+  const engine = new Engine(new MemoryLog(), { idGen: (() => { let n = 0; return () => `i${++n}`; })(), defaultB: 1_000 }); // хүрээний дүрэм асаалттай
+  const sync = new DevjeeSync({ client: api, engine, log: () => undefined, now: () => ON_DAY });
+  const { tournamentId } = await sync.importTournament('T1');
+  const t = () => engine.tournament(tournamentId);
+  assert.deepEqual(t().roundInfo, { '1': { format: 'team', name: 'Монгол үндэсний бөх' }, '2': { format: 'team', name: 'Өвөрмонгол бөх', otherStyle: true } });
+  assert.equal(t().rounds, 2);
+  let r = await sync.syncOnce(tournamentId);
+  assert.equal(r.newBouts, 2);
+  assert.equal(engine.markets({ boutId: 'dj-m1' }).length, 1, 'Монгол бөхийн үед таавар нээгдэнэ');
+  assert.match(engine.markets({ boutId: 'dj-m1' })[0]!.title, /Монгол үндэсний бөх: /);
+  assert.equal(engine.markets({ boutId: 'dj-m2' }).length, 0, 'өвөрмонгол бөхөд таавар нээхгүй');
+  const status = sync.status(tournamentId);
+  assert.equal(status.warning, undefined, '4 бөхтэй багийн барилдаан — «32-оос цөөн бөх» анхааруулга гарахгүй');
+  assert.equal(status.format, 'team');
+  // Өвөрмонгол бөхийн үр дүн рейтингт орохгүй
+  const before = engine.rating('wB').rating;
+  state.matches.m2!.winner = 2;
+  r = await sync.syncOnce(tournamentId);
+  assert.equal(engine.bout('dj-m2').result?.winnerId, 'wD');
+  assert.equal(engine.rating('wB').rating, before);
+  assert.equal(engine.rating('wD').source, 'seed');
+  // devjee дээр давааны нэр солигдвол дагана
+  state.rounds['2'] = { id: 2, type: 'team', _name: 'Шигшээ тоглолт' };
+  await sync.syncOnce(tournamentId);
+  assert.equal(t().roundInfo?.['2']?.otherStyle, undefined);
+  assert.equal(t().roundInfo?.['2']?.name, 'Шигшээ тоглолт');
+  sync.stop();
+});
+
+test('devjee дээр устсан/солигдсон хослол: барилдаан цуцлагдаж зах зээл хүчингүй болно, шинэ хослол нээгдэнэ; хоосорсон төлөвт бөөнөөр цуцлахгүй', async () => {
+  const st = baseState();
+  const { api, state } = fakeApi(st);
+  const engine = new Engine(new MemoryLog(), { idGen: (() => { let n = 0; return () => `i${++n}`; })(), defaultB: 1_000, bracket: false });
+  engine.createUser({ id: 'u1', name: 'Бат' });
+  const sync = new DevjeeSync({ client: api, engine, log: () => undefined, now: () => ON_DAY });
+  const { tournamentId } = await sync.importTournament('T1');
+  state.matches.m1 = { round: 1, w1: 'wA', w2: 'wD', winner: 0 } as DevjeeStateMatch;
+  state.matches.m2 = { round: 1, w1: 'wB', w2: 'wC', winner: 0 } as DevjeeStateMatch;
+  await sync.syncOnce(tournamentId);
+  const m1 = engine.markets({ boutId: 'dj-m1' })[0]!;
+  engine.buy('u1', m1.id, 1, 200);
+  const balance = engine.balance('u1');
+
+  // Зохион байгуулагч 1-р давааг дахин оноов: m1 устаж m9 (wA–wC) үүссэн; m2-ын бөх солигдсон (wB–wD)
+  delete state.matches.m1;
+  state.matches.m9 = { round: 1, w1: 'wA', w2: 'wC', winner: 0 } as DevjeeStateMatch;
+  state.matches.m2 = { round: 1, w1: 'wB', w2: 'wD', winner: 0 } as DevjeeStateMatch;
+  let r = await sync.syncOnce(tournamentId);
+  assert.equal(r.cancelled, 2);
+  assert.equal(r.newBouts, 2);
+  assert.equal(engine.market(m1.id).status, 'voided');
+  assert.equal(engine.market(m1.id).voidReason, 'devjee дээр хослол өөрчлөгдсөн');
+  assert.equal(engine.balance('u1'), balance + 200, 'бооцоо буцна');
+  assert.ok(engine.bout('dj-m1').cancelled);
+  assert.ok(engine.bout('dj-m2').cancelled);
+  const active = engine.bouts(tournamentId);
+  assert.deepEqual(active.map((b) => b.id).sort(), ['dj-m2~2', 'dj-m9']);
+  assert.deepEqual([engine.bout('dj-m2~2').aId, engine.bout('dj-m2~2').bId], ['wB', 'wD']);
+  assert.equal(engine.markets({ boutId: 'dj-m2~2' })[0]!.status, 'open');
+  assert.equal(engine.markets({ tournamentId, status: 'open' }).length, 2, 'өнчин нээлттэй зах зээл үлдэхгүй');
+
+  // Дахин sync — идемпотент
+  r = await sync.syncOnce(tournamentId);
+  assert.equal(r.cancelled + r.newBouts + r.voided, 0);
+
+  // devjee w1/w2-ыг сольж бичсэн ч давагч зөв бөхөд очно (манай А/Б-ийн дарааллаас үл хамаарна)
+  state.matches.m9 = { round: 1, w1: 'wC', w2: 'wA', winner: 1 } as DevjeeStateMatch;
+  r = await sync.syncOnce(tournamentId);
+  assert.equal(r.cancelled, 0, 'ижил хоёр бөх — дараалал солигдсон нь шинэ хослол биш');
+  assert.equal(engine.bout('dj-m9').result?.winnerId, 'wC');
+
+  // Төлөв гэнэт хоосорвол (devjee-ийн дутуу баримт) юуг ч цуцлахгүй
+  const saved = { ...state.matches };
+  state.matches = {};
+  r = await sync.syncOnce(tournamentId);
+  assert.equal(r.cancelled, 0);
+  assert.equal(engine.bout('dj-m2~2').cancelled, undefined);
+  state.matches = saved;
+
+  // Үр дүнтэй барилдаан devjee дээр устсан ч манайд хэвээр (зах зээл аль хэдийн шийдэгдсэн)
+  delete state.matches.m9;
+  r = await sync.syncOnce(tournamentId);
+  assert.equal(r.cancelled, 0);
+  assert.equal(engine.bout('dj-m9').result?.winnerId, 'wC');
+  engine.checkInvariants();
+  sync.stop();
+});
+
+test('өнчин барилдаан цуцлагдсаны дараа тэмцээн «дууссан» болж sync унтарна', async () => {
+  const { ids, matches } = fullBracket32();
+  const st = baseState();
+  st.wrestlers = Object.fromEntries(ids.map((id, i) => [id, { id, order: i + 1 }]));
+  st.rounds = { '1': { id: 1 }, '2': { id: 2 }, '3': { id: 3 }, '4': { id: 4 }, '5': { id: 5 } };
+  // 4-р даваанд хуучин хослол (x1–x3, шийдэгдээгүй) зарлагдаж байсан
+  st.matches = Object.fromEntries(Object.entries(matches).filter(([, m]) => m.round <= 3));
+  st.matches.old1 = { round: 4, w1: 'x1', w2: 'x3', winner: 0 } as DevjeeStateMatch;
+  const { api, state } = fakeApi(st);
+  const engine = new Engine(new MemoryLog(), { idGen: (() => { let n = 0; return () => `i${++n}`; })(), defaultB: 1_000 });
+  const sync = new DevjeeSync({ client: api, engine, log: () => undefined, now: () => ON_DAY });
+  const { tournamentId } = await sync.importTournament('T1', { withRatings: false });
+  await sync.syncOnce(tournamentId);
+  assert.equal(engine.markets({ boutId: 'dj-old1' })[0]!.status, 'open');
+  // Хослол дахин оноогдож, тэмцээн төгсөв
+  state.matches = { ...matches };
+  await sync.syncOnce(tournamentId);
+  assert.equal(engine.markets({ boutId: 'dj-old1' })[0]!.status, 'voided');
+  assert.equal(engine.roundStatus(tournamentId).championId, 'x1');
+  assert.equal(sync.offReason(tournamentId), 'finished', 'өнчин барилдаан «дуусаагүй» гэж барихгүй');
+  assert.equal(sync.isEnabled(tournamentId), false);
+  assert.equal(engine.markets({ tournamentId, status: 'open' }).length, 0);
+  sync.stop();
+});
+
+test('автомат импорт: нүүр хуудасны ойрын тэмцээнийг өөрөө оруулж sync асаана; хол огноотой, оруулсныг алгасна; алдаа гарвал хойшлуулж дахин оролдоно', async () => {
+  const { api } = fakeApi(baseState());
+  const list = {
+    scheduled: [
+      { id: 'SOON', name: 'Маргаашийн барилдаан', date: '2026-08-21' },
+      { id: 'FAR', name: 'Ирэх сарын наадам', date: '2026-09-20' },
+    ],
+    home: [
+      { id: 'TODAY', name: 'Өнөөдрийн барилдаан', date: '2026-08-20' },
+      { id: 'OLD', name: 'Өнгөрсөн долоо хоногийн', date: '2026-08-12' },
+      { id: 'BAD', name: 'Алдаатай', date: '2026-08-20' },
+    ],
+  };
+  let failBad = true;
+  const client: DevjeeApi = {
+    ...api,
+    home: async () => structuredClone(list) as Awaited<ReturnType<DevjeeApi['home']>>,
+    tournament: async (tid) => {
+      if (tid === 'BAD' && failBad) throw new Error('devjee 503');
+      const row = [...list.scheduled, ...list.home].find((x) => x.id === tid)!;
+      return { id: tid, name: row.name, date: row.date, type: [3] } as Awaited<ReturnType<DevjeeApi['tournament']>>;
+    },
+  };
+  const engine = new Engine(new MemoryLog(), { idGen: (() => { let n = 0; return () => `i${++n}`; })(), bracket: false });
+  let now = ON_DAY;
+  const imported: string[] = [];
+  const sync = new DevjeeSync({ client, engine, log: () => undefined, now: () => now, onImported: (r) => void imported.push(r.devjeeId) });
+  const done = await sync.autoImport();
+  assert.deepEqual(done.sort(), ['dj-SOON', 'dj-TODAY']);
+  assert.deepEqual(imported.sort(), ['SOON', 'TODAY']);
+  assert.ok(sync.isEnabled('dj-TODAY') && sync.isEnabled('dj-SOON'), 'импортын дараа sync өөрөө асна');
+  assert.equal(engine.state.tournaments.has('dj-FAR'), false, 'нөгөөдрөөс хойших тэмцээнийг хараахан оруулахгүй');
+  assert.equal(engine.state.tournaments.has('dj-OLD'), false, 'өчигдрөөс өмнөхийг оруулахгүй');
+  // Давтахад юу ч хийхгүй; алдаатайг 30 минутын дотор дахин оролдохгүй
+  failBad = false;
+  assert.deepEqual(await sync.autoImport(), []);
+  now += 31 * 60_000;
+  assert.deepEqual(await sync.autoImport(), ['dj-BAD']);
+  sync.stop();
+  assert.deepEqual(await sync.autoImport(), [], 'зогссоны дараа ажиллахгүй');
+});
+
+test('sync-ийн давтамж: тэмцээний өдрөөс өмнө 10 минут тутам, өдөр нь алгасалгүй; өдөр өнгөрч devjee 48 цаг чимээгүй бол унтарна', async () => {
+  const st = baseState();
+  st.matches.m1 = { round: 1, w1: 'wA', w2: 'wD', winner: 0 } as DevjeeStateMatch;
+  const { api, calls, meta } = fakeApi(st);
+  const engine = new Engine(new MemoryLog(), { idGen: (() => { let n = 0; return () => `i${++n}`; })(), bracket: false });
+  let now = ON_DAY - 24 * 3_600_000; // өмнөх өдөр
+  const sync = new DevjeeSync({ client: api, engine, log: () => undefined, now: () => now });
+  const { tournamentId } = await sync.importTournament('T1', { withRatings: false });
+  const base = calls.state;
+  await sync.tick();
+  await sync.tick();
+  await sync.tick();
+  assert.equal(calls.state - base, 1, 'өмнөх өдөр: эхнийхээс хойш 10 минут өнгөртөл дахин татахгүй');
+  now += 11 * 60_000;
+  await sync.tick();
+  assert.equal(calls.state - base, 2);
+  // Тэмцээний өдөр: тик бүрд
+  now = ON_DAY;
+  await sync.tick();
+  await sync.tick();
+  await sync.tick();
+  assert.equal(calls.state - base, 5);
+  // Өдөр өнгөрсөн, шийдэгдээгүй барилдаан үлдсэн, devjee 2 хоногийн өмнөөс чимээгүй → унтарна
+  meta.actionId = '-P3dPE1W6EkXu-qJ99us'; // 2026-10-11T05:21:45Z
+  now = Date.parse('2026-10-14T06:00:00Z');
+  engine.updateTournament(tournamentId, { date: '2026-10-11' });
+  st.date = '2026-10-11';
+  sync.setEnabled(tournamentId, true);
+  await sync.tick();
+  assert.equal(sync.offReason(tournamentId), 'expired');
+  assert.equal(sync.isEnabled(tournamentId), false);
+  sync.stop();
 });

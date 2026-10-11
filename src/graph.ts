@@ -19,6 +19,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
+import type { RoundInfo } from './domain.ts';
 import { FAST_K, seedRating, titleFromCode, updateRatings, winProbability, type Title } from './rating.ts';
 
 export interface ArchiveWrestler {
@@ -52,6 +53,10 @@ export interface ArchiveBout {
   kind?: string;
   noShow?: boolean;
   mid: string;
+  /** Шигшээ биш даваа: тойргийн ('rr') / багийн ('team') — `round` нь хүрээний даваа биш. */
+  fmt?: 'rr' | 'team';
+  /** Монгол үндэсний бөх биш (өвөрмонгол г.м) — `loadArchive` үүнийг `skipped`-д тусгаарлана. */
+  other?: boolean;
 }
 
 export interface ArchiveTournamentMeta {
@@ -66,12 +71,17 @@ export interface ArchiveTournamentMeta {
   matchCount: number;
   order: Record<string, number>;
   hasState: boolean;
+  /** Шигшээ биш / нэртэй даваанууд (тойргийн, багийн) — түлхүүр = давааны дугаар. */
+  roundInfo?: Record<string, RoundInfo>;
 }
 
 export interface Archive {
   wrestlers: Record<string, ArchiveWrestler>;
+  /** Монгол бөхийн барилдаанууд (шигшээ, тойргийн, багийн). */
   bouts: ArchiveBout[];
   tournaments: Map<string, ArchiveTournamentMeta>;
+  /** Монгол бөх биш (өвөрмонгол г.м) барилдаанууд — рейтинг/граф/загварт орохгүй. */
+  skipped?: ArchiveBout[];
 }
 
 /** data/devjee/ архивыг уншина. */
@@ -79,16 +89,19 @@ export function loadArchive(dir = path.join('data', 'devjee')): Archive {
   const boutsPath = path.join(dir, 'bouts.jsonl');
   if (!existsSync(boutsPath)) throw new Error(`Архив олдсонгүй: ${boutsPath} — эхлээд «npm run archive» ажиллуул.`);
   const bouts: ArchiveBout[] = [];
+  // Монгол бөх биш барилдаан (өвөрмонгол г.м) рейтинг, граф, загварт орохгүй — тусад нь
+  const skipped: ArchiveBout[] = [];
   for (const line of readFileSync(boutsPath, 'utf8').split('\n')) {
     if (line.trim() === '') continue;
-    bouts.push(JSON.parse(line) as ArchiveBout);
+    const b = JSON.parse(line) as ArchiveBout;
+    (b.other ? skipped : bouts).push(b);
   }
   const wPath = path.join(dir, 'wrestlers.json');
   const wrestlers = existsSync(wPath) ? (JSON.parse(readFileSync(wPath, 'utf8')) as Record<string, ArchiveWrestler>) : {};
   const tPath = path.join(dir, 'tournaments.json');
   const tournaments = new Map<string, ArchiveTournamentMeta>();
   if (existsSync(tPath)) for (const t of JSON.parse(readFileSync(tPath, 'utf8')) as ArchiveTournamentMeta[]) tournaments.set(t.id, t);
-  return { wrestlers, bouts, tournaments };
+  return { wrestlers, bouts, tournaments, skipped };
 }
 
 const DAY = 86_400_000;

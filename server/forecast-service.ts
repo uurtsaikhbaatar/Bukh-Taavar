@@ -5,7 +5,7 @@
 
 import type { ForecastDto, MarketRuleDto } from '../app/src/shared/api.ts';
 import type { MarketRule } from '../src/domain.ts';
-import type { Engine } from '../src/engine.ts';
+import { EngineError, type Engine } from '../src/engine.ts';
 import { championTop, forecastTournament, matchupProbs, probChampion, type Forecast } from '../src/forecast.ts';
 import { BIG_TOURNAMENT_KIND, titleLabel } from '../src/rating.ts';
 
@@ -22,6 +22,8 @@ export class ForecastService {
   /** Тэмцээний прогноз (кэш: үр дүн/оролцогч өөрчлөгдөөгүй бол дахин тооцохгүй). */
   forecast(tournamentId: string): Forecast {
     const t = this.engine.tournament(tournamentId);
+    // Монте-Карло нь шигшээ хүрээг (унасан нь хасагдана) загварчилдаг — тойргийн/багийн тэмцээнд утгагүй
+    if (!this.engine.isKnockout(tournamentId)) throw new EngineError('NOT_KNOCKOUT', 'Тойргийн/багийн барилдаанд аваргын прогноз тооцохгүй.');
     const p = this.engine.tournamentProgress(tournamentId);
     const known = this.engine
       .bouts(tournamentId)

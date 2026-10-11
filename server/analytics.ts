@@ -9,13 +9,13 @@ import path from 'node:path';
 import type { H2hDto } from '../app/src/shared/api.ts';
 import type { Engine } from '../src/engine.ts';
 import { BoutGraph, eloReplay, loadArchive, type Archive } from '../src/graph.ts';
-import { ageFromBirthDate, predictProbability, titleLabel, type PredictSide } from '../src/rating.ts';
+import { ageFromBirthDate, BASE_RATING, predictProbability, titleLabel, type PredictSide } from '../src/rating.ts';
 
 /**
  * Архивын Elo replay-ийн суурь: 1300 → devjee.mn-ийн рейтингтэй ±10 дотор таардаг
  * (Орхонбаяр 2359 vs 2354, Батмагнай 2310 vs 2301 …) — нэг масштаб.
  */
-export const ARCHIVE_ELO_SEED = 1300;
+export const ARCHIVE_ELO_SEED = BASE_RATING;
 
 export interface ArchiveImportResult {
   added: number;
@@ -48,24 +48,69 @@ export class Analytics {
   }
 
   /**
-   * Таамгийн шинжүүдийг архиваас нөхнө — сервер эхлэх бүрд дуудагдана, идемпотент:
+   * Архивт БАЙХГҮЙ үр дүнтэй барилдаантай бөхчүүд (архиваас хойш болсон, гараар үүсгэсэн
+   * тэмцээн г.м) — тэдний рейтингт архив мэдэхгүй өөрчлөлт орсон тул архиваар дарж болохгүй.
+   */
+  private localOnlyWrestlers(engine: Engine): Set<string> {
+    // Архивын `tid|mid` түлхүүрүүд — зөвхөн манайд байгаа тэмцээнүүдийнх (250к мөрийг санах ойд
+    // байнга барихгүй; сервер 512 MB-д багтах ёстой)
+    const tids = new Set<string>();
+    for (const t of engine.state.tournaments.values()) if (t.devjeeId) tids.add(t.devjeeId);
+    const archived = new Set<string>();
+    for (const b of this.archive.bouts) if (tids.has(b.tid)) archived.add(`${b.tid}|${b.mid}`);
+    for (const b of this.archive.skipped ?? []) if (tids.has(b.tid)) archived.add(`${b.tid}|${b.mid}`);
+    const out = new Set<string>();
+    for (const b of engine.bouts()) {
+      if (!b.result) continue;
+      const tid = engine.state.tournaments.get(b.tournamentId)?.devjeeId;
+      if (tid && b.devjeeMatchId && archived.has(`${tid}|${b.devjeeMatchId}`)) continue;
+      out.add(b.aId);
+      out.add(b.bId);
+    }
+    return out;
+  }
+
+  /**
+   * Рейтинг, таамгийн шинжүүдийг архивтай тулгана — сервер эхлэх бүрд дуудагдана, идемпотент.
+   *
+   * Зарчим: **архив нь өөрийн мэддэг бүх барилдааны хувьд үнэн**. Бөхийн манайд бүртгэгдсэн
+   * бүх барилдаан архивт байгаа бол (`localOnlyWrestlers`-д ороогүй) түүний рейтинг, хурдан
+   * рейтинг, туршлага, сүүлийн огноог архивын replay-ийн утгаар тавина. Ингэснээр серверийн
+   * алдаатай үед хуримтлагдсан гажиг (2026-10: түүхгүй бөхийг цолоор 1450+ гэж үнэлсэн,
+   * өвөрмонгол бөхийн үр дүн рейтингт орсон) шинэ архив орж ирэх бүрд өөрөө арилна.
+   * Архиваас хойш барилдсан бөхийн локал рейтингийг хөндөхгүй; тэдэнд зөвхөн дутууг нөхнө:
    *  - хурдан рейтинг байхгүй бол архивын replay-ээс;
    *  - туршлага (барилдааны тоо) архивынхаас бага бол архивынх хүртэл өсгөнө: рейтингийн
    *    бичлэг нь туршлагагүй үүссэн бөхөд локал барилдаан 0-ээс тоологдож (Орхонбаяр 2,
    *    Батмагнай 8) таамгийн туршлагын гишүүнийг эвдэж байв. max() тул давхар тоолохгүй;
-   *  - сүүлийн барилдааны огноо архивынхаас өмнө бол шинэчилнэ;
-   *  - рейтингийн бичлэггүй боловч архивт түүхтэй бөхөд бүтэн бичлэг тавина (эс бөгөөс
-   *    таамаг түүнийг анх удаа барилдаж буй гэж андуурна).
-   * Буцаах: бичсэн бөхийн тоо.
+   *  - сүүлийн барилдааны огноо архивынхаас өмнө бол шинэчилнэ.
+   * Рейтингийн бичлэггүй боловч архивт түүхтэй бөхөд бүтэн бичлэг тавина (эс бөгөөс таамаг
+   * түүнийг анх удаа барилдаж буй гэж андуурна). Буцаах: бичсэн бөхийн тоо.
    */
   backfillPredictive(engine: Engine): number {
     let n = 0;
+    const localOnly = this.localOnlyWrestlers(engine);
     for (const [wid, f] of this.fast) {
       const w = engine.state.wrestlers.get(wid) ?? engine.wrestlerByDevjeeId(wid);
       if (!w) continue;
       const cur = engine.state.ratings.get(w.id);
       const g = this.games.get(wid);
       const lb = this.lastBout.get(wid);
+      const elo = this.elo.get(wid);
+      if (cur && elo !== undefined && g !== undefined && lb !== undefined && !localOnly.has(w.id)) {
+        // devjee-ээс шууд авсан, архиваас шинэ рейтингийг дарахгүй (importAllWrestlers-тэй ижил дүрэм)
+        const keepRating = cur.source === 'devjee' && cur.asOf >= this.latestDate;
+        const ratingOff = !keepRating && Math.abs(cur.rating - elo) > 0.5;
+        const fastOff = cur.fast === undefined || Math.abs(cur.fast - f) > 0.5;
+        const metaOff = cur.games !== g || (cur.lastBoutAt ?? '').slice(0, 10) !== lb;
+        if (ratingOff || fastOff || metaOff) {
+          const meta = { games: g, lastBoutAt: (cur.lastBoutAt ?? '').slice(0, 10) === lb ? cur.lastBoutAt! : lb, fast: f };
+          if (ratingOff) engine.setRating(w.id, elo, 'devjee', this.latestDate, meta);
+          else engine.setRating(w.id, cur.rating, cur.source, cur.asOf, meta);
+          n += 1;
+        }
+        continue;
+      }
       if (!cur) {
         const meta: { games?: number; lastBoutAt?: string; fast: number } = { fast: f };
         if (g !== undefined) meta.games = g;

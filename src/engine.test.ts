@@ -336,11 +336,12 @@ test('bout зах зээл нээхгүй байх, prior гараар өгөх,
   const r = engine.createBout({ id: 'b3', tournamentId: 't1', round: 2, aId: 'w1', bId: 'w3', withMarket: false });
   assert.equal(r.market, undefined);
   assert.equal(engine.markets({ boutId: 'b3' }).length, 0);
-  // w3 рейтинггүй → сумын заан суурь 1650
+  // w3 рейтинггүй → архивын суурь 1300 (цолоор 1650 биш); түүхгүй бөхийн эсрэг таамаг 97.5%-аас хэтрэхгүй
   const prior = engine.priorForBout('w1', 'w3');
   assert.equal(prior.sourceB, 'seed');
-  assert.equal(prior.ratingB, 1650);
+  assert.equal(prior.ratingB, 1300);
   assert.ok(prior.pA > 0.9);
+  assert.ok(prior.pA <= 0.975 + 1e-12);
   const r2 = engine.createBout({ id: 'b4', tournamentId: 't1', round: 2, aId: 'w2', bId: 'w3', prior: [0.6, 0.4] });
   assert.ok(Math.abs(engine.probabilities(r2.market!.id)[0]! - 0.6) < 1e-9);
   // Үр дүн бүртгэхэд зах зээл байхгүй барилдаан ч болно
@@ -654,7 +655,7 @@ test('бөх засах, devjee id-аар хайх, дэвтэр хязгаар'
   assert.equal(engine.wrestler('w3').title, 'аймгийн_начин');
   assert.equal(engine.wrestlerByDevjeeId('-Kabc')?.id, 'w3');
   assert.equal(engine.wrestlerByDevjeeId('none'), undefined);
-  assert.equal(engine.rating('w3').rating, 1800);
+  assert.equal(engine.rating('w3').rating, 1450);
   for (let i = 0; i < 5; i++) engine.grantTokens('u1', 10, 'тест');
   assert.equal(engine.ledger('u1', 3).length, 3);
   assert.equal(engine.ledger(undefined, 100).length, 3 + 5);
@@ -766,4 +767,114 @@ test('аварга: гоцтой хүрээ (дундын даваанд 1 ба�
   x.play(1, 'c', 'd', 'c');
   x.play(2, 'a', 'c', 'c');
   assert.equal(x.e.roundStatus('t').championId, 'c');
+});
+
+test('тойргийн даваа: давааны контекстгүй, гарчигт давааны нэр, аварга/хүрээний дүрэмгүй, үр дүн орох бүрд арилжаагүй зах зээл дахин үнэлэгдэнэ', () => {
+  // Хүрээний дүрэм асаалттай (анхдагч) — тойргийн тэмцээнд 4 бөх байх нь алдаа биш
+  const e = new Engine(new MemoryLog(), { idGen: (() => { let k = 0; return () => `r${++k}`; })(), defaultB: 1_000, now: () => new Date('2026-10-09T03:00:00Z') });
+  e.createUser({ id: 'u1', name: 'Бат' });
+  for (const id of ['a', 'b', 'c', 'd']) e.addWrestler({ id, name: `Бөх ${id}`, title: 'цолгүй' });
+  e.createTournament({ id: 't', name: 'Өсвөрийн барилдаан', date: '2026-10-09', rounds: 1, roundInfo: { '1': { format: 'round-robin', name: '15 нас' } } });
+  assert.equal(e.isKnockout('t'), false);
+  assert.equal(e.roundLabel('t', 1), '15 нас');
+  assert.deepEqual(e.boutContext({ tournamentId: 't', round: 1 }), {}, 'тойргийн даваанд «1-р даваа»-ны налуу хэрэглэхгүй');
+  // Бүх хослол урьдчилан зарлагдана (4 бөх → 6 барилдаан)
+  const pairs: [string, string][] = [['a', 'b'], ['a', 'c'], ['a', 'd'], ['b', 'c'], ['b', 'd'], ['c', 'd']];
+  const markets = new Map<string, string>();
+  for (const [x, y] of pairs) {
+    const r = e.createBout({ id: `${x}${y}`, tournamentId: 't', round: 1, aId: x, bId: y });
+    markets.set(`${x}${y}`, r.market!.id);
+  }
+  assert.equal(e.market(markets.get('ab')!).title, 'Өсвөрийн барилдаан · 15 нас: Бөх a — Бөх b');
+  const p = (id: string) => e.probabilities(markets.get(id)!)[0]!;
+  assert.ok(Math.abs(p('ac') - 0.5) < 1e-9, 'түүхгүй хоёр бөх — 50/50');
+  e.buy('u1', markets.get('ad')!, 0, 100); // арилжаатай зах зээлийг хөндөхгүй
+  const adBefore = p('ad');
+  const events = e.state.eventCount;
+  const res = e.recordBoutResult('ab', 'a');
+  assert.ok(p('ac') > 0.5, 'a давсны дараа a–c дахин үнэлэгдэнэ');
+  assert.ok(Math.abs(p('bc') - 0.5) > 0.01, 'b-ийн үлдсэн барилдаан ч дахин үнэлэгдэнэ');
+  assert.equal(p('ad'), adBefore, 'арилжаатай зах зээл хэвээр');
+  assert.ok(Math.abs(p('cd') - 0.5) < 1e-9, 'оролцоогүй бөхчүүдийн зах зээл хэвээр');
+  assert.deepEqual(res.repricedMarkets.map((m) => m.id).sort(), [markets.get('ac')!, markets.get('bc')!, markets.get('bd')!].sort());
+  assert.ok(e.state.eventCount > events + 1);
+  // Дахин үнэлэгдсэн зах зээл цэвэр: q = q0, эзэмшил, эргэлт байхгүй
+  const ac = e.market(markets.get('ac')!);
+  assert.deepEqual(ac.q, ac.q0);
+  assert.equal(ac.tradeCount, 0);
+  assert.throws(() => e.repriceMarket(markets.get('ad')!, [0.5, 0.5]), (err: unknown) => err instanceof EngineError && err.code === 'HAS_TRADES');
+  // Бүгд барилдсан ч аварга, «дууссан» гэж байхгүй; хүрээний анхааруулга ч үгүй
+  for (const [x, y] of pairs.slice(1)) e.recordBoutResult(`${x}${y}`, x);
+  assert.equal(e.roundStatus('t').finished, false);
+  assert.equal(e.roundStatus('t').championId, undefined);
+  assert.equal(e.bracketIssue('t'), undefined, 'цөөн бөхтэй тойргийн барилдаан алдаа биш');
+  e.checkInvariants();
+});
+
+test('өөр төрлийн бөхийн даваа (өвөрмонгол): таавар нээгдэхгүй, үр дүн рейтингт орохгүй', () => {
+  const { engine } = seeded();
+  engine.createTournament({ id: 't2', name: 'Багийн барилдаан', date: '2026-10-10', rounds: 2, roundInfo: { '1': { format: 'team', name: 'Монгол үндэсний бөх' }, '2': { format: 'team', name: 'Өвөрмонгол бөх', otherStyle: true } } });
+  const mn = engine.createBout({ id: 'x1', tournamentId: 't2', round: 1, aId: 'w1', bId: 'w3' });
+  assert.ok(mn.market, 'Монгол бөхийн багийн даваанд таавар нээгдэнэ');
+  assert.equal(mn.market!.title, 'Багийн барилдаан · Монгол үндэсний бөх: Б.Орхонбаяр — Ц.Тестбөх');
+  const other = engine.createBout({ id: 'x2', tournamentId: 't2', round: 2, aId: 'w1', bId: 'w3', withMarket: true });
+  assert.equal(other.market, undefined, 'өвөрмонгол бөхөд таавар нээхгүй');
+  const before = engine.rating('w1').rating;
+  const r = engine.recordBoutResult('x2', 'w3');
+  assert.equal(engine.rating('w1').rating, before, 'өөр төрлийн бөхөд унасан нь Монгол бөхийн рейтингт нөлөөлөхгүй');
+  assert.equal(engine.rating('w3').source, 'seed');
+  assert.equal(r.repricedMarkets.length, 0);
+  assert.equal(engine.bout('x2').result?.winnerId, 'w3');
+});
+
+test('барилдаан цуцлах: зах зээл хүчингүй + буцаалт, явцаас хасагдана, тото үлдсэн барилдаанаар шийдэгдэнэ, replay ижил', () => {
+  const { engine, log } = seeded();
+  const b2 = engine.createBout({ id: 'b2', tournamentId: 't1', round: 9, aId: 'w1', bId: 'w3' });
+  const b3 = engine.createBout({ id: 'b3', tournamentId: 't1', round: 9, aId: 'w2', bId: 'w3' });
+  engine.buy('u1', b2.market!.id, 1, 500);
+  assert.equal(engine.balance('u1'), 9_500);
+  engine.createToto({ id: 'toto1', title: 'Тото', tournamentId: 't1', boutIds: ['b1', 'b2', 'b3'], fee: 100 });
+  engine.enterToto('u1', 'toto1', ['w1', 'w1', 'w2']);
+  engine.enterToto('u2', 'toto1', ['w2', 'w3', 'w3']);
+
+  const c = engine.cancelBout('b2', 'devjee дээр хослол өөрчлөгдсөн');
+  assert.deepEqual(c.voidedMarkets.map((m) => m.id), [b2.market!.id]);
+  assert.equal(engine.market(b2.market!.id).status, 'voided');
+  assert.equal(engine.market(b2.market!.id).voidReason, 'devjee дээр хослол өөрчлөгдсөн');
+  assert.equal(engine.balance('u1'), 9_900, 'бооцоо буцна (тотогийн хураамж 100 хасагдсан хэвээр)');
+  assert.deepEqual(engine.bouts('t1').map((b) => b.id).sort(), ['b1', 'b3'], 'цуцлагдсан барилдаан жагсаалтад үгүй');
+  assert.equal(engine.bouts('t1', { includeCancelled: true }).length, 3);
+  assert.ok(engine.bout('b2').cancelled, 'бичлэг нь түүхэнд үлдэнэ');
+  assert.throws(() => engine.recordBoutResult('b2', 'w1'), (err: unknown) => err instanceof EngineError && err.code === 'CANCELLED');
+  assert.throws(() => engine.cancelBout('b2', 'дахин'), (err: unknown) => err instanceof EngineError && err.code === 'CANCELLED');
+  assert.throws(() => engine.createToto({ title: 'Т2', tournamentId: 't1', boutIds: ['b2', 'b3'] }), (err: unknown) => err instanceof EngineError && err.code === 'BAD_TOTO');
+
+  // Үлдсэн хоёр барилдаан шийдэгдмэгц тото шийдэгдэнэ: цуцлагдсан барилдаан хэнд ч оноо өгөхгүй
+  engine.recordBoutResult('b1', 'w1');
+  assert.equal(engine.toto('toto1').status, 'open');
+  engine.recordBoutResult('b3', 'w2');
+  const toto = engine.toto('toto1');
+  assert.equal(toto.status, 'settled');
+  assert.equal(toto.entries.get('u1')!.correct, 2);
+  assert.equal(toto.entries.get('u2')!.correct, 0);
+  assert.throws(() => engine.cancelBout('b1', 'хожимдсон'), (err: unknown) => err instanceof EngineError && err.code === 'ALREADY_RESOLVED');
+  engine.checkInvariants();
+  // Логийг дахин уншихад яг ижил төлөв
+  const again = new Engine(log, { bracket: false });
+  assert.deepEqual(serializeState(again.state), serializeState(engine.state));
+});
+
+test('ижил нэртэй хоёр бөхийн барилдаан: зах зээл нээгдэнэ (овог/нутгаар, эс бөгөөс дугаараар ялгана)', () => {
+  const { engine } = seeded();
+  engine.addWrestler({ id: 'n1', name: 'Б.Батбаяр', fullName: 'Болдын Батбаяр', title: 'цолгүй' });
+  engine.addWrestler({ id: 'n2', name: 'Б.Батбаяр', fullName: 'Баярын Батбаяр', title: 'цолгүй' });
+  engine.addWrestler({ id: 'n3', name: 'Б.Батбаяр', title: 'цолгүй', aimag: 'Төв' });
+  engine.addWrestler({ id: 'n4', name: 'Б.Батбаяр', title: 'цолгүй' });
+  const m1 = engine.createBout({ id: 'same1', tournamentId: 't1', round: 1, aId: 'n1', bId: 'n2' }).market!;
+  assert.deepEqual(m1.outcomes, ['Б.Батбаяр (Болдын Батбаяр)', 'Б.Батбаяр (Баярын Батбаяр)']);
+  assert.deepEqual(m1.outcomeRefs, ['n1', 'n2']);
+  const m2 = engine.createBout({ id: 'same2', tournamentId: 't1', round: 1, aId: 'n3', bId: 'n4' }).market!;
+  assert.deepEqual(m2.outcomes, ['Б.Батбаяр (1)', 'Б.Батбаяр (2)'], 'ялгах мэдээлэл дутуу бол дугаараар');
+  const r = engine.recordBoutResult('same1', 'n2');
+  assert.equal(r.resolvedMarkets[0]!.resolvedOutcome, 1);
 });

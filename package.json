@@ -32,6 +32,7 @@
     "setup": "npm install && npm --prefix app install"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
     "@types/node": "^24.0.0",
     "@types/pg": "^8.21.0",
     "typescript": "^5.9.0"

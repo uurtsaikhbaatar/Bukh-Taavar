@@ -16,7 +16,7 @@ import { join } from 'node:path';
 import { inflateSync } from 'node:zlib';
 
 import { placeName, sumName } from './devjee-places.ts';
-import type { Wrestler } from './domain.ts';
+import type { RoundFormat, RoundInfo, Wrestler } from './domain.ts';
 import { titleFromCode, winProbability, type Title } from './rating.ts';
 
 // ───────────────────────── API-ийн хэлбэрүүд ─────────────────────────
@@ -250,6 +250,40 @@ export function inflateState(base64: string): DevjeeTournamentState {
   const buf = Buffer.from(base64, 'base64');
   const text = inflateSync(buf).toString('utf8');
   return JSON.parse(text) as DevjeeTournamentState;
+}
+
+/**
+ * Монгол үндэсний бөх БИШ барилдааны нэр (devjee-ийн давааны `_name`): өвөрмонгол г.м.
+ * Ийм даваанд таавар нээхгүй, үр дүнг рейтингт тооцохгүй — 2026-10-10-ны багийн тэмцээний
+ * «Өвөрмонгол бөх» үед загварын 99%-ийн 25 фаворитоос 15 нь унасан (өөр төрлийн бөх).
+ */
+const OTHER_STYLE = /өвөр\s*-?\s*монгол|өвөрлөгч|буриад\s+бөх|халимаг\s+бөх|тува\s+бөх|чөлөөт\s+бөх|жүдо|самбо|сумо|к[үу]р[эе]ш|хүрэш/i;
+
+export function isOtherStyle(name: string | undefined): boolean {
+  return !!name && OTHER_STYLE.test(name);
+}
+
+/** devjee-ийн давааны `type` → манай хэлбэр (тэмдэглээгүй/`default` = шигшээ). */
+export function roundFormat(type: string | undefined): RoundFormat {
+  return type === 'round-robin' ? 'round-robin' : type === 'team' ? 'team' : 'knockout';
+}
+
+/**
+ * Шигшээ биш эсвэл нэртэй даваанууд (түлхүүр = давааны дугаар). Бүх даваа ердийн шигшээ,
+ * нэргүй бол undefined.
+ */
+export function roundInfoFromState(state: Pick<DevjeeTournamentState, 'rounds'>): Record<string, RoundInfo> | undefined {
+  const out: Record<string, RoundInfo> = {};
+  for (const [key, r] of Object.entries(state.rounds ?? {})) {
+    const format = roundFormat(r.type);
+    const name = (r._name ?? '').trim().replace(/\s+/g, ' ').slice(0, 60);
+    if (format === 'knockout' && !name) continue;
+    const info: RoundInfo = { format };
+    if (name) info.name = name;
+    if (isOtherStyle(name)) info.otherStyle = true;
+    out[key] = info;
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 const PUSH_CHARS = '-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz';

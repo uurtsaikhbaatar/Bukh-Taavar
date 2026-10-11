@@ -29,6 +29,7 @@ import type {
   MarketRule,
   RatingSource,
   Role,
+  RoundInfo,
   Tournament,
   TournamentId,
   TradeRecord,
@@ -488,12 +489,46 @@ export class Engine {
     return side;
   }
 
-  /** Барилдааны таамгийн контекст: даваа, улсын наадам эсэх. */
+  /**
+   * Барилдааны таамгийн контекст: даваа, улсын наадам эсэх. Давааны гишүүд (1-р даваанд
+   * фаворит найдвартай, 4+ даваанд бага) шигшээ хүрээнд л утгатай — тойргийн/багийн
+   * «даваа» нь насны ангилал, үе тул тэнд даваагүй (суурь налуу).
+   */
   boutContext(bout: Pick<Bout, 'round' | 'tournamentId'>): PredictContext {
     const t = this.state.tournaments.get(bout.tournamentId);
-    const ctx: PredictContext = { round: bout.round };
+    const ctx: PredictContext = {};
+    if (!t || Engine.roundInfoOf(t, bout.round).format === 'knockout') ctx.round = bout.round;
     if (t?.kind === BIG_TOURNAMENT_KIND) ctx.big = true;
     return ctx;
+  }
+
+  private static readonly KNOCKOUT: RoundInfo = { format: 'knockout' };
+
+  private static roundInfoOf(t: Tournament, round: number): RoundInfo {
+    return t.roundInfo?.[String(round)] ?? Engine.KNOCKOUT;
+  }
+
+  /** Давааны хэлбэр, нэр (тэмдэглээгүй даваа = шигшээ). */
+  roundInfo(tournamentId: TournamentId, round: number): RoundInfo {
+    return Engine.roundInfoOf(this.requireTournament(tournamentId), round);
+  }
+
+  /** Бүх даваа шигшээ (ердийн хүрээ) эсэх — тойргийн/багийн даваатай тэмцээнд аварга, хүрээний дүрэм үйлчлэхгүй. */
+  isKnockout(tournamentId: TournamentId): boolean {
+    return Engine.allKnockout(this.requireTournament(tournamentId));
+  }
+
+  private static allKnockout(t: Tournament): boolean {
+    return !Object.values(t.roundInfo ?? {}).some((r) => r.format !== 'knockout');
+  }
+
+  /** Давааны харагдах нэр: «3-р даваа», эсвэл devjee дээрх нэр («15 нас»), нэргүй бол хэлбэр. */
+  roundLabel(tournamentId: TournamentId, round: number): string {
+    const info = this.roundInfo(tournamentId, round);
+    if (info.name) return info.name;
+    if (info.format === 'round-robin') return `Тойргийн барилдаан ${round}`;
+    if (info.format === 'team') return `Багийн барилдаан ${round}`;
+    return `${round}-р даваа`;
   }
 
   /** Хоёр бөхийн барилдааны загварын магадлал (хурдан рейтинг, туршлага, амралт, нас; даваа/наадмын контекст). */
@@ -571,7 +606,8 @@ export class Engine {
     // цорын ганц барилдаан (3-р байрын г.м нэмэлт барилдаанд аль нэг нь өмнө ялагдсан байдаг).
     // Хүрээний дүрэм зөрчигдсөн бол (32-оос цөөн бөх / 5-аас цөөн даваа — бүртгэл дутуу)
     // аварга тооцохгүй: 2026-10-03-нд дутуу импортолсон тэмцээн 1-р даваагаар «дуусч» байв.
-    if (!this.bracketProblem(t, participated.size)) {
+    // Тойргийн/багийн даваатай тэмцээнд финал гэж байхгүй — аварга тооцохгүй.
+    if (Engine.allKnockout(t) && !this.bracketProblem(t, participated.size)) {
       let lastRound = 0;
       for (const b of bouts) if (b.round > lastRound) lastRound = b.round;
       const finals = bouts.filter((b) => {
@@ -619,6 +655,8 @@ export class Engine {
   private bracketProblem(t: Tournament, entrants: number): string | undefined {
     const rule = this.opts.bracket;
     if (!rule) return undefined;
+    // Тойргийн/багийн барилдаан цөөн бөхтэй байх нь хэвийн — хүрээний дүрэм шигшээд л хамаарна
+    if (!Engine.allKnockout(t)) return undefined;
     if (entrants < rule.minEntrants) return `${entrants} бөх — тэмцээн ${rule.minEntrants}-аас цөөнгүй бөхтэй байна (бүртгэл дутуу эсвэл халз барилдаан)`;
     if (t.rounds < rule.minRounds) return `${t.rounds} даваа — тэмцээн ${rule.minRounds}-аас цөөнгүй даваатай байна (давааны мэдээлэл дутуу)`;
     return undefined;
@@ -905,15 +943,26 @@ export class Engine {
     this.emit({ ...this.stamp(), type: 'bout_created', bout });
 
     const result: { bout: Bout; market?: Market } = { bout: this.requireBout(id) };
-    if (input.withMarket ?? true) {
+    // Монгол үндэсний бөх биш даваанд (өвөрмонгол г.м) таавар нээхгүй — загвар тэр бөхийг мэдэхгүй
+    if ((input.withMarket ?? true) && !Engine.roundInfoOf(t, input.round).otherStyle) {
       const prior = input.prior ?? (() => {
         const p = this.priorForBout(input.aId, input.bId, this.boutContext(bout));
         return [p.pA, p.pB] as [number, number];
       })();
+      // Ижил нэртэй хоёр бөх таарвал (Б.Батбаяр — Б.Батбаяр) үр дүнгийн нэр давхардаж зах зээл
+      // нээгддэггүй байсан → овог эсвэл нутгаар, эс бөгөөс дугаараар ялгана.
+      let [nameA, nameB] = [a.name, b.name];
+      if (nameA === nameB) {
+        const tag = (w: Wrestler) => (w.fullName && w.fullName !== w.name ? w.fullName : [w.aimag, w.sum].filter(Boolean).join(', '));
+        const [ta, tb] = [tag(a), tag(b)];
+        const distinct = ta !== '' && tb !== '' && ta !== tb;
+        nameA = `${a.name} (${distinct ? ta : '1'})`;
+        nameB = `${b.name} (${distinct ? tb : '2'})`;
+      }
       const marketInput: Parameters<Engine['createMarket']>[0] = {
         kind: 'bout',
-        title: `${t.name} · ${input.round}-р даваа: ${a.name} — ${b.name}`,
-        outcomes: [a.name, b.name],
+        title: `${t.name} · ${this.roundLabel(t.id, input.round)}: ${a.name} — ${b.name}`,
+        outcomes: [nameA, nameB],
         outcomeRefs: [a.id, b.id],
         prior,
         boutId: id,
@@ -931,9 +980,39 @@ export class Engine {
     return this.requireBout(id);
   }
 
-  bouts(tournamentId?: TournamentId): Bout[] {
-    const all = [...this.state.bouts.values()];
-    return tournamentId === undefined ? all : all.filter((b) => b.tournamentId === tournamentId);
+  /** Барилдаанууд — цуцлагдсаныг (хослол өөрчлөгдсөн) анхдагчаар оруулахгүй. */
+  bouts(tournamentId?: TournamentId, options: { includeCancelled?: boolean } = {}): Bout[] {
+    const out: Bout[] = [];
+    for (const b of this.state.bouts.values()) {
+      if (tournamentId !== undefined && b.tournamentId !== tournamentId) continue;
+      if (b.cancelled && !options.includeCancelled) continue;
+      out.push(b);
+    }
+    return out;
+  }
+
+  /**
+   * Барилдааныг цуцална (devjee дээр хослол өөрчлөгдсөн/устсан): нээлттэй зах зээлийг
+   * хүчингүй болгож бооцоог буцаана; барилдаан тэмцээний явц, тотод тооцогдохоо болино.
+   * Үр дүнтэй барилдааныг цуцлахгүй (зах зээл нь аль хэдийн шийдэгдсэн).
+   */
+  cancelBout(boutId: BoutId, reason: string): { bout: Bout; voidedMarkets: Market[] } {
+    const bout = this.requireBout(boutId);
+    if (bout.result) throw new EngineError('ALREADY_RESOLVED', 'Үр дүнтэй барилдааныг цуцлахгүй.');
+    if (bout.cancelled) throw new EngineError('CANCELLED', 'Барилдаан аль хэдийн цуцлагдсан.');
+    const why = reason.trim() || 'Барилдаан цуцлагдсан';
+    const voidedMarkets: Market[] = [];
+    for (const m of [...this.state.markets.values()]) {
+      if (m.boutId !== boutId || (m.status !== 'open' && m.status !== 'closed')) continue;
+      this.voidMarket(m.id, why);
+      voidedMarkets.push(m);
+    }
+    this.emit({ ...this.stamp(), type: 'bout_cancelled', boutId, reason: why });
+    // Барилдаан байхгүй болсноор дүрэмт зах зээл, тото шийдэгдэх боломжтой болсон байж магадгүй
+    const settled = this.settleTournamentMarkets(bout.tournamentId);
+    voidedMarkets.push(...settled.resolved, ...settled.voided);
+    this.settleReadyTotos(bout.tournamentId);
+    return { bout: this.requireBout(boutId), voidedMarkets };
   }
 
   /**
@@ -943,15 +1022,18 @@ export class Engine {
     boutId: BoutId,
     winnerId: WrestlerId,
     options: { updateRatings?: boolean } = {},
-  ): { bout: Bout; resolvedMarkets: Market[]; skippedMarkets: Market[] } {
+  ): { bout: Bout; resolvedMarkets: Market[]; skippedMarkets: Market[]; repricedMarkets: Market[] } {
     const bout = this.requireBout(boutId);
     if (bout.result) throw new EngineError('ALREADY_RESOLVED', 'Энэ барилдааны үр дүн аль хэдийн бүртгэгдсэн.');
+    if (bout.cancelled) throw new EngineError('CANCELLED', 'Цуцлагдсан барилдаанд үр дүн бүртгэхгүй.');
     if (winnerId !== bout.aId && winnerId !== bout.bId) {
       throw new EngineError('BAD_WINNER', 'Давагч нь барилдааны хоёр бөхийн нэг байх ёстой.');
     }
     const t = this.requireTournament(bout.tournamentId);
+    const info = Engine.roundInfoOf(t, bout.round);
     const ratingUpdates: { wrestlerId: WrestlerId; rating: number; source: RatingSource; asOf: string; fast?: number }[] = [];
-    if (options.updateRatings ?? true) {
+    // Өөр төрлийн бөхийн (өвөрмонгол г.м) үр дүн Монгол бөхийн рейтингт орохгүй
+    if ((options.updateRatings ?? true) && !info.otherStyle) {
       const a = this.rating(bout.aId);
       const b = this.rating(bout.bId);
       const aWon = winnerId === bout.aId;
@@ -981,7 +1063,51 @@ export class Engine {
     const settled = this.settleTournamentMarkets(bout.tournamentId);
     resolvedMarkets.push(...settled.resolved, ...settled.voided);
     this.settleReadyTotos(bout.tournamentId);
-    return { bout: this.requireBout(boutId), resolvedMarkets, skippedMarkets };
+    // Тойргийн/багийн даваанд бүх хослол урьдчилан зарлагддаг: энэ хоёр бөхийн үлдсэн
+    // барилдааны арилжаагүй зах зээлийг шинэ рейтингээр дахин үнэлнэ.
+    const repricedMarkets = ratingUpdates.length && info.format !== 'knockout' ? this.repriceUntraded(bout.tournamentId, [bout.aId, bout.bId]) : [];
+    return { bout: this.requireBout(boutId), resolvedMarkets, skippedMarkets, repricedMarkets };
+  }
+
+  /**
+   * Арилжаагүй, нээлттэй зах зээлийн анхны магадлалыг солино. Нэг ч арилжаа ороогүй тул
+   * хэний ч эзэмшил, үлдэгдэл өөрчлөгдөхгүй (купоны хөл худалдан авсан үнээрээ хэвээр).
+   */
+  repriceMarket(marketId: MarketId, prior: number[]): Market {
+    const m = this.requireMarket(marketId);
+    if (m.status !== 'open') throw new EngineError('MARKET_CLOSED', `Зах зээл нээлттэй биш (${m.status}).`);
+    if (m.tradeCount !== 0) throw new EngineError('HAS_TRADES', 'Арилжаатай зах зээлийг дахин үнэлэхгүй.');
+    if (prior.length !== m.outcomes.length) throw new EngineError('BAD_PRIOR', 'Анхны магадлалын урт таарахгүй.');
+    for (const p of prior) if (!Number.isFinite(p) || p < 0) throw new EngineError('BAD_PRIOR', 'Магадлал 0-ээс их байх ёстой.');
+    if (prior.reduce((s, p) => s + p, 0) <= 0) throw new EngineError('BAD_PRIOR', 'Магадлалын нийлбэр 0.');
+    this.emit({ ...this.stamp(), type: 'market_repriced', marketId, q0: initialQuantities(prior, m.b) });
+    return m;
+  }
+
+  /**
+   * Тэмцээний өгөгдсөн бөхчүүдийн хүлээгдэж буй барилдааны АРИЛЖААГҮЙ зах зээлийг одоогийн
+   * загварын магадлалаар шинэчилнэ (зөрүү `minShift`-ээс бага бол хөндөхгүй — үйл явдал хэмнэнэ).
+   */
+  repriceUntraded(tournamentId: TournamentId, wrestlerIds: WrestlerId[], minShift = 0.01): Market[] {
+    const who = new Set(wrestlerIds);
+    const out: Market[] = [];
+    for (const b of this.bouts(tournamentId)) {
+      if (b.result || (!who.has(b.aId) && !who.has(b.bId))) continue;
+      for (const m of this.state.markets.values()) {
+        if (m.boutId !== b.id || m.kind !== 'bout' || m.status !== 'open' || m.tradeCount !== 0) continue;
+        const ia = m.outcomeRefs.indexOf(b.aId);
+        const ib = m.outcomeRefs.indexOf(b.bId);
+        if (ia < 0 || ib < 0 || m.outcomes.length !== 2) continue;
+        const p = this.priorForBout(b.aId, b.bId, this.boutContext(b));
+        if (Math.abs(p.pA - prices(m.q, m.b)[ia]!) < minShift) continue;
+        const prior: number[] = [];
+        prior[ia] = p.pA;
+        prior[ib] = p.pB;
+        this.repriceMarket(m.id, prior);
+        out.push(m);
+      }
+    }
+    return out;
   }
 
   // ───────────────────────── зах зээл ─────────────────────────
@@ -1438,6 +1564,7 @@ export class Engine {
       const bout = this.requireBout(b);
       if (bout.tournamentId !== input.tournamentId) throw new EngineError('BAD_TOTO', 'Барилдаанууд нэг тэмцээнийх байх ёстой.');
       if (bout.result) throw new EngineError('BAD_TOTO', 'Аль хэдийн болсон барилдаан орж болохгүй.');
+      if (bout.cancelled) throw new EngineError('BAD_TOTO', 'Цуцлагдсан барилдаан орж болохгүй.');
     }
     const fee = input.fee ?? 100;
     Engine.assertInteger(fee, 'Хураамж');
@@ -1502,7 +1629,8 @@ export class Engine {
       }
       const bout = this.requireBout(toto.boutIds[i]!);
       if (p !== bout.aId && p !== bout.bId) throw new EngineError('BAD_TOTO', `${i + 1}-р барилдаанд буруу бөх сонгосон.`);
-      clean.push(p);
+      // Цуцлагдсан барилдааны таамаг тооцогдохгүй
+      clean.push(bout.cancelled ? null : p);
     });
     if (clean.every((p) => p === null)) throw new EngineError('BAD_TOTO', 'Дор хаяж нэг таамаг өгнө үү.');
     if (user.balance < toto.fee) throw new EngineError('INSUFFICIENT', `Үлдэгдэл хүрэлцэхгүй: ${user.balance} < ${toto.fee}.`);
@@ -1528,12 +1656,18 @@ export class Engine {
     const toto = this.requireToto(totoId);
     if (toto.status !== 'open') throw new EngineError('ALREADY_RESOLVED', 'Тото аль хэдийн шийдэгдсэн.');
     const winners = new Map<BoutId, WrestlerId | 'void'>();
+    let scored = 0;
     for (const b of toto.boutIds) {
       const bout = this.requireBout(b);
+      // Цуцлагдсан барилдаан (хослол өөрчлөгдсөн) хэнд ч оноо өгөхгүй
+      if (bout.cancelled) {
+        winners.set(b, 'void');
+        continue;
+      }
       if (!bout.result) throw new EngineError('NOT_READY', 'Бүх барилдаан дуусаагүй байна.');
       winners.set(b, bout.result.winnerId);
+      scored += 1;
     }
-    const scored = toto.boutIds.length;
     const entries = [...toto.entries.values()];
     const scoredEntries = entries.map((en) => {
       let correct = 0;
@@ -1598,7 +1732,7 @@ export class Engine {
   private settleReadyTotos(tournamentId: TournamentId): Toto[] {
     const out: Toto[] = [];
     for (const t of this.totos({ status: 'open', tournamentId })) {
-      if (t.boutIds.every((b) => this.state.bouts.get(b)?.result)) {
+      if (t.boutIds.every((b) => this.state.bouts.get(b)?.result || this.state.bouts.get(b)?.cancelled)) {
         this.settleToto(t.id);
         out.push(t);
       }

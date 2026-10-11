@@ -4,9 +4,15 @@
  *   npm run archive            (≈2 300 хүсэлт, 300 мс завсартай ≈ 15–25 мин; тасарвал кэшнээс үргэлжилнэ)
  *   npm run archive -- --from 2000 --to 2026     (жилийн хүрээ)
  *
+ * Тэмцээний жагсаалт: жилийн жагсаалт (devjee-ийн хайлт) + нүүр хуудас + `archive/extra-tournaments.json`.
+ * Жилийн жагсаалтад ТОЙРГИЙН/БАГИЙН тэмцээн ордоггүй — зөвхөн нүүр хуудсанд (сүүлийн 10) гардаг тул
+ * харсан бүрээ `extra-tournaments.json`-д хуримтлуулна (git-д орно). Сүүлийн 3 долоо хоногийн
+ * тэмцээний төлөвийг кэшээс биш шинээр татна (явцын дундуур архивласан тэмцээн дутуу үлдэхгүй).
+ *
  * Гаралт (data/devjee/):
- *   tournaments.json  — тэмцээн бүр: мета + бүртгэгдсэн бөх (зэрэг дэв) + давааны тоо
- *   bouts.jsonl       — барилдаан бүр нэг мөр: {tid,date,round,w1,w2,winner,kind,noShow,mid}
+ *   tournaments.json  — тэмцээн бүр: мета + бүртгэгдсэн бөх (зэрэг дэв) + давааны тоо (+ roundInfo)
+ *   bouts.jsonl       — барилдаан бүр нэг мөр: {tid,date,round,w1,w2,winner,kind,noShow,mid,fmt,other}
+ *                       fmt: 'rr' тойргийн / 'team' багийн даваа; other: Монгол бөх биш (өвөрмонгол г.м)
  *   wrestlers.json    — бөх бүр: нэр, цол, аймаг, төрсөн он …
  *   summary.json      — тоо баримт
  *   archive.log       — явц
@@ -15,7 +21,8 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { AIMAGS, DevjeeClient, DevjeeError, toWrestler, type DevjeeTournament, type DevjeeTournamentState } from '../src/devjee.ts';
+import { AIMAGS, DevjeeClient, DevjeeError, roundInfoFromState, toWrestler, type DevjeeTournament, type DevjeeTournamentState } from '../src/devjee.ts';
+import type { RoundInfo } from '../src/domain.ts';
 
 const argv = process.argv.slice(2);
 const opt = (name: string, def: number): number => {
@@ -29,6 +36,11 @@ const TO = opt('to', new Date().getFullYear());
 const REFRESH_WRESTLERS = argv.includes('--refresh-wrestlers');
 const OUT = path.join('data', 'devjee');
 const YEAR = 365 * 24 * 3_600_000;
+const HOUR = 3_600_000;
+/** Жилийн жагсаалтад ордоггүй (тойргийн/багийн) тэмцээнүүд — харсан бүрээ хуримтлуулна. */
+const EXTRA = path.join('archive', 'extra-tournaments.json');
+/** Энэ хугацаанаас шинэ тэмцээний төлөвийг кэшээс биш шинээр татна (явцын дундуур архивласан байж болно). */
+const FRESH_DAYS = 21;
 mkdirSync(OUT, { recursive: true });
 
 const logFile = path.join(OUT, 'archive.log');
@@ -69,6 +81,8 @@ export interface ArchiveTournament {
   /** wid → зэрэг дэв (order) */
   order: Record<string, number>;
   hasState: boolean;
+  /** Шигшээ биш / нэртэй даваанууд (тойргийн, багийн). */
+  roundInfo?: Record<string, RoundInfo>;
 }
 
 export interface ArchiveBout {
@@ -81,6 +95,10 @@ export interface ArchiveBout {
   kind?: string;
   noShow?: boolean;
   mid: string;
+  /** Шигшээ биш даваа: тойргийн ('rr') / багийн ('team') — `round` нь хүрээний даваа биш. */
+  fmt?: 'rr' | 'team';
+  /** Монгол үндэсний бөх биш (өвөрмонгол г.м) — рейтинг, загварт орохгүй. */
+  other?: boolean;
 }
 
 async function main(): Promise<void> {
@@ -100,7 +118,30 @@ async function main(): Promise<void> {
     }
     if (metas.size && year % 10 === 0) log(`  ${year} он хүртэл: ${metas.size} тэмцээн`);
   }
-  log(`Тэмцээн: ${metas.size}`);
+  // 1б) Жилийн жагсаалтад ороогүй тэмцээнүүд: өмнө хуримтлуулсан + одоо нүүр хуудсанд байгаа
+  const extra = new Map<string, DevjeeTournament>();
+  if (existsSync(EXTRA)) for (const t of JSON.parse(readFileSync(EXTRA, 'utf8')) as DevjeeTournament[]) extra.set(t.id, t);
+  const home = await retry(() => client.home(), 'нүүр хуудас');
+  const today = new Date(Date.now() + 8 * HOUR).toISOString().slice(0, 10);
+  for (const t of [...(home?.home ?? []), ...(home?.scheduled ?? [])]) {
+    // Ирээдүйн (товлогдсон) тэмцээнд барилдаан байхгүй — болсных нь дараа орно
+    if (!t?.id || !/^\d{4}-\d{2}-\d{2}$/.test(t.date ?? '') || t.date > today) continue;
+    if (!metas.has(t.id)) extra.set(t.id, { id: t.id, name: t.name, date: t.date, ...(t.type ? { type: t.type } : {}), ...(t.rank !== undefined ? { rank: t.rank } : {}), ...(t.location ? { location: t.location } : {}), ...(t.arena !== undefined ? { arena: t.arena } : {}) } as DevjeeTournament);
+  }
+  let added = 0;
+  for (const [id, t] of [...extra]) {
+    if (metas.has(id)) {
+      extra.delete(id); // жилийн жагсаалтад орсон бол давхар хадгалахгүй
+      continue;
+    }
+    const y = Number(t.date.slice(0, 4));
+    if (y < FROM || y > TO) continue;
+    metas.set(id, t);
+    added += 1;
+  }
+  mkdirSync(path.dirname(EXTRA), { recursive: true });
+  writeFileSync(EXTRA, JSON.stringify([...extra.values()].sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id)), null, 1) + '\n', 'utf8');
+  log(`Тэмцээн: ${metas.size} (жилийн жагсаалтаас гадуур ${added})`);
 
   // 2) Тэмцээн бүрийн төлөв (барилдаанууд)
   const tournaments: ArchiveTournament[] = [];
@@ -112,7 +153,8 @@ async function main(): Promise<void> {
   let noState = 0;
   for (const meta of [...metas.values()].sort((a, b) => a.date.localeCompare(b.date))) {
     i += 1;
-    const res = await retry(() => client.tournamentState(meta.id, YEAR), `төлөв ${meta.id}`);
+    const fresh = Date.now() - Date.parse(meta.date) < FRESH_DAYS * 24 * HOUR;
+    const res = await retry(() => client.tournamentState(meta.id, fresh ? HOUR : YEAR), `төлөв ${meta.id}`);
     const state: DevjeeTournamentState | undefined = res?.state;
     const rec: ArchiveTournament = {
       id: meta.id,
@@ -136,12 +178,18 @@ async function main(): Promise<void> {
       }
       rec.wrestlerCount = Object.keys(rec.order).length;
       rec.rounds = Object.keys(state.rounds ?? {}).length;
+      const roundInfo = roundInfoFromState({ rounds: state.rounds ?? {} });
+      if (roundInfo) rec.roundInfo = roundInfo;
       const lines: string[] = [];
       for (const [mid, m] of Object.entries(state.matches ?? {})) {
         if (!m.w1 || !m.w2 || (m.winner !== 1 && m.winner !== 2)) continue;
         const b: ArchiveBout = { tid: meta.id, date: state.date || meta.date, round: m.round, w1: m.w1, w2: m.w2, winner: m.winner, mid };
         if (m.kind) b.kind = m.kind;
         if (m._noShow) b.noShow = true;
+        const info = roundInfo?.[String(m.round)];
+        if (info?.format === 'round-robin') b.fmt = 'rr';
+        else if (info?.format === 'team') b.fmt = 'team';
+        if (info?.otherStyle) b.other = true;
         bouts.push(b);
         wids.add(m.w1);
         wids.add(m.w2);

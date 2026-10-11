@@ -3,7 +3,7 @@ import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native
 
 import { api, ApiError } from '../api';
 import { Button, Card, H2, Loading, Msg, P, Pill, ProbBar, Row } from '../components/ui';
-import { fmtTokens, fmtWhen } from '../format';
+import { fmtTokens, fmtWhen, formatName, roundName } from '../format';
 import type { HomeDto, MarketDto, TournamentDto, WrestlerDto } from '../shared/api';
 import { theme } from '../theme';
 
@@ -55,10 +55,16 @@ export function MarketCard({ m, onOpen }: { m: MarketDto; onOpen: (id: string) =
 
 /** Тэмцээний карт: даваа/барилдааны төлөв + «Барилдаанууд → бооцоо» товч. */
 function TournamentCard({ t, onOpenBoard }: { t: TournamentDto; onOpenBoard: (id: string) => void }) {
+  // Тойргийн/багийн тэмцээнд «явж буй даваа» гэж байхгүй (даваа = насны ангилал, үе) — нийт дүнгээр
+  const pending = t.format ? t.pendingBouts : t.currentPending;
   const line = t.finished
     ? `Дууссан · аварга: ${t.championName ?? '?'}`
+    : t.format && t.boutCount
+      ? pending
+        ? `${t.boutCount} барилдаан · ${pending} хүлээгдэж буй${t.openMarkets ? ` · ${t.openMarkets} нээлттэй таавар` : ''}`
+        : `${t.boutCount} барилдаан — бүгд шийдэгдсэн`
     : t.currentRound
-      ? `${t.currentRound}-р даваа явж байна · ${t.currentTotal} барилдаан · ${t.currentPending} хүлээгдэж буй${t.openMarkets ? ` · ${t.openMarkets} нээлттэй таавар` : ''}`
+      ? `${roundName(t.currentRound, t.roundLabels)} явж байна · ${t.currentTotal} барилдаан · ${t.currentPending} хүлээгдэж буй${t.openMarkets ? ` · ${t.openMarkets} нээлттэй таавар` : ''}`
       : t.entrants
         ? `Эхлээгүй · ${t.entrants} бөх бүртгэлтэй`
         : 'Барилдаан алга';
@@ -69,16 +75,16 @@ function TournamentCard({ t, onOpenBoard }: { t: TournamentDto; onOpenBoard: (id
         <Text style={s.mTitle} numberOfLines={2}>
           {t.name}
         </Text>
-        {t.currentPending > 0 ? <Pill text="бооцоо нээлттэй" color={theme.success} textColor="#052e16" /> : t.finished ? <Pill text="дууссан" /> : null}
+        {pending > 0 && (!t.format || t.openMarkets > 0) ? <Pill text="бооцоо нээлттэй" color={theme.success} textColor="#052e16" /> : t.finished ? <Pill text="дууссан" /> : null}
       </Row>
       <P muted small>
-        {t.date} · {t.rounds} даваа{t.kind ? ` · ${t.kind}` : ''}
+        {t.date} · {t.format ? formatName(t.format) : `${t.rounds} даваа`}{t.kind ? ` · ${t.kind}` : ''}
       </P>
       <P small>{line}</P>
       {canOpen ? (
         <Button
-          title={t.finished || t.currentPending === 0 ? '🥋 Барилдаанууд, үр дүн →' : '🥋 Барилдаанууд → бооцоо тавих'}
-          variant={t.currentPending > 0 ? 'accent' : 'secondary'}
+          title={t.finished || pending === 0 ? '🥋 Барилдаанууд, үр дүн →' : '🥋 Барилдаанууд → бооцоо тавих'}
+          variant={pending > 0 ? 'accent' : 'secondary'}
           onPress={() => onOpenBoard(t.id)}
         />
       ) : null}

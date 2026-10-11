@@ -50,6 +50,8 @@ export interface BoutDto {
   id: string;
   tournamentId: string;
   round: number;
+  /** Шигшээ биш / нэртэй давааны нэр («15 нас», «Монгол үндэсний бөх»); байхгүй бол «N-р даваа». */
+  roundLabel?: string;
   a: WrestlerDto;
   b: WrestlerDto;
   /** Загварын магадлал (Elo) — зөвхөн админд явна. */
@@ -228,6 +230,10 @@ export type TotoStatus = 'open' | 'settled' | 'voided';
 export interface TotoBoutDto {
   boutId: string;
   round: number;
+  /** Давааны нэр (шигшээ биш / нэртэй даваанд). */
+  roundLabel?: string;
+  /** Цуцлагдсан (devjee дээр хослол өөрчлөгдсөн) — хэнд ч оноо өгөхгүй. */
+  cancelled?: boolean;
   a: { id: string; name: string; titleLabel: string; place?: string; rating: number };
   b: { id: string; name: string; titleLabel: string; place?: string; rating: number };
   /** Загварын магадлал — зөвхөн админд явна. */
@@ -308,6 +314,8 @@ export interface TournamentDto {
   place?: string;
   devjeeId?: string;
   boutCount: number;
+  /** Үр дүн нь хараахан ороогүй барилдаан (бүх даваагаар). */
+  pendingBouts: number;
   openMarkets: number;
   syncEnabled: boolean;
   /** Одоо явж буй даваа (0 = эхлээгүй) ба түүний хүлээгдэж буй/нийт барилдаан. */
@@ -317,6 +325,10 @@ export interface TournamentDto {
   finished: boolean;
   championName?: string;
   entrants: number;
+  /** Шигшээ биш тэмцээн: тойргийн / багийн (аварга, прогноз, хүрээний дүрэм үйлчлэхгүй). Байхгүй = ердийн шигшээ. */
+  format?: 'round-robin' | 'team';
+  /** Нэртэй / шигшээ биш даваануудын нэр (түлхүүр = давааны дугаар). */
+  roundLabels?: Record<string, string>;
 }
 
 export interface TournamentDetailDto {
@@ -339,6 +351,8 @@ export interface BoardSideDto {
 export interface BoardBoutDto {
   id: string;
   round: number;
+  /** Давааны нэр (шигшээ биш / нэртэй даваанд). */
+  roundLabel?: string;
   marketId?: string;
   /** Зах зээлийн төлөв; `none` = зах зээлгүй барилдаан. */
   status: MarketStatus | 'none';
@@ -412,6 +426,8 @@ export interface DevjeeSyncStatusDto {
   devjeeChangedAt?: string;
   /** Sync хамгийн сүүлд шинэ барилдаан/үр дүн авчирсан цаг. */
   lastChangeAt?: string;
+  /** Шигшээ биш тэмцээн: тойргийн / багийн (аварга, хүрээний дүрэм үйлчлэхгүй). */
+  format?: 'round-robin' | 'team';
 }
 
 /** Тэмцээний Монте-Карло прогноз. */

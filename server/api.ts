@@ -77,6 +77,8 @@ export interface ApiDeps {
   onFatal?: (err: unknown) => void;
   /** /health-д харуулах орчны мэдээлэл (нууц биш). */
   info?: { storage: 'postgres' | 'jsonl'; email: string };
+  /** Логийн бичих эрхийн төлөв (Postgres): дугаар, алдсан эсэх — /health-д. */
+  writer?: () => { epoch: number; fenced: boolean };
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
@@ -158,6 +160,10 @@ export function createRouter(deps: ApiDeps): Router {
     return dto;
   };
 
+  /** Нэртэй / шигшээ биш давааны нэр; ердийн «N-р даваа» бол undefined (клиент өөрөө бичнэ). */
+  const roundLabelOf = (tournamentId: string, round: number): string | undefined =>
+    engine.state.tournaments.get(tournamentId)?.roundInfo?.[String(round)] ? engine.roundLabel(tournamentId, round) : undefined;
+
   /** Загварын магадлал (priorA) зөвхөн админд — энгийн хэрэглэгч зөвхөн бооцооны үнийг харна. */
   const boutDto = (b: Bout, admin = false): BoutDto => {
     const dto: BoutDto = {
@@ -170,6 +176,8 @@ export function createRouter(deps: ApiDeps): Router {
     };
     if (b.result) dto.winnerId = b.result.winnerId;
     if (b.scheduledAt) dto.scheduledAt = b.scheduledAt;
+    const label = roundLabelOf(b.tournamentId, b.round);
+    if (label) dto.roundLabel = label;
     return dto;
   };
 
@@ -261,6 +269,7 @@ export function createRouter(deps: ApiDeps): Router {
       date: t.date,
       rounds: t.rounds,
       boutCount: bouts.length,
+      pendingBouts: bouts.filter((b) => !b.result).length,
       openMarkets: open,
       syncEnabled: deps.devjee?.isEnabled(t.id) ?? false,
       currentRound: st.current,
@@ -273,6 +282,12 @@ export function createRouter(deps: ApiDeps): Router {
     if (t.kind) dto.kind = t.kind;
     if (t.place) dto.place = t.place;
     if (t.devjeeId) dto.devjeeId = t.devjeeId;
+    const infos = Object.entries(t.roundInfo ?? {});
+    if (infos.length) {
+      dto.roundLabels = Object.fromEntries(infos.map(([k]) => [k, engine.roundLabel(t.id, Number(k))]));
+      if (infos.some(([, r]) => r.format === 'team')) dto.format = 'team';
+      else if (infos.some(([, r]) => r.format === 'round-robin')) dto.format = 'round-robin';
+    }
     return dto;
   };
 
@@ -296,9 +311,11 @@ export function createRouter(deps: ApiDeps): Router {
       .map((b): BoardBoutDto => {
         const m = marketByBout.get(b.id);
         const prior = admin ? engine.priorForBout(b.aId, b.bId, engine.boutContext(b)) : undefined;
+        const label = roundLabelOf(t.id, b.round);
         const row: BoardBoutDto = {
           id: b.id,
           round: b.round,
+          ...(label ? { roundLabel: label } : {}),
           status: m ? m.status : 'none',
           a: side(b.aId),
           b: side(b.bId),
@@ -394,6 +411,9 @@ export function createRouter(deps: ApiDeps): Router {
       const row: TotoDto['bouts'][number] = { boutId: b.id, round: b.round, a: brief(b.aId), b: brief(b.bId) };
       if (admin) row.priorA = engine.priorForBout(b.aId, b.bId, engine.boutContext(b)).pA;
       if (b.result) row.winnerId = b.result.winnerId;
+      const label = roundLabelOf(b.tournamentId, b.round);
+      if (label) row.roundLabel = label;
+      if (b.cancelled) row.cancelled = true;
       return row;
     });
     const started = t.boutIds.some((id) => engine.state.bouts.get(id)?.result);
@@ -498,6 +518,7 @@ export function createRouter(deps: ApiDeps): Router {
     users: engine.state.users.size,
     sse: hub.size,
     ...(deps.info ? { storage: deps.info.storage, email: deps.info.email, archive: deps.analytics ? deps.analytics.archive.bouts.length : 0 } : {}),
+    ...(deps.writer ? { writer: deps.writer() } : {}),
   }));
 
   // ── бүртгэл / нэвтрэлт ──

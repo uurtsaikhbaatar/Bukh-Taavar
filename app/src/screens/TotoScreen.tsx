@@ -117,8 +117,9 @@ function TotoDetail({ toto, me, onBack, onTraded, refreshKey }: { toto: TotoDto;
           return (
             <View key={b.boutId} style={s.bout}>
               <P muted small>
-                {b.round}-р даваа{b.priorA !== undefined ? ` · загвар ${fmtPct(b.priorA)} / ${fmtPct(1 - b.priorA)}` : ''}
+                {b.roundLabel ?? `${b.round}-р даваа`}{b.priorA !== undefined ? ` · загвар ${fmtPct(b.priorA)} / ${fmtPct(1 - b.priorA)}` : ''}
                 {b.winnerId ? ` · ${b.winnerId === b.a.id ? b.a.name : b.b.name} давсан` : ''}
+                {b.cancelled ? ' · цуцлагдсан (хослол өөрчлөгдсөн) — тооцогдохгүй' : ''}
               </P>
               <Row>
                 {[b.a, b.b].map((w) => {

@@ -96,8 +96,8 @@ test('eloReplay: K=32, цолын суурь, asOf', () => {
     tournaments: new Map(),
   };
   const seed = seedFromArchive(archive.wrestlers);
-  assert.equal(seed('A'), 2300);
-  assert.equal(seed('B'), 1650);
+  assert.equal(seed('A'), 1450);
+  assert.equal(seed('B'), 1300);
   assert.equal(seed('none'), 1500);
 });
 

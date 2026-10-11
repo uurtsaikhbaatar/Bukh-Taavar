@@ -3,7 +3,7 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { api, ApiError } from '../api';
 import { Button, Card, Field, H2, Loading, Msg, P, Pill, Row } from '../components/ui';
-import { fmtAgo, fmtPct, fmtTokens, fmtWhen } from '../format';
+import { fmtAgo, fmtPct, fmtTokens, fmtWhen, formatName, roundName } from '../format';
 import type { AdminUserDto, BoutDto, DevjeeHomeDto, DevjeeSyncStatusDto, ForecastDto, MarketDto, RoundStatusDto, TournamentDetailDto, TournamentDto, WrestlerDto } from '../shared/api';
 import { theme } from '../theme';
 
@@ -127,8 +127,8 @@ function TournamentsTab({ refreshKey, onOpenMarket }: { refreshKey: number; onOp
             {t.syncEnabled ? <Pill text="devjee sync ●" color={theme.success} textColor="#052e16" /> : null}
           </Row>
           <P muted small>
-            {t.date} · {t.rounds} даваа · {t.boutCount} барилдаан · {t.openMarkets} нээлттэй зах зээл{t.devjeeId ? ' · devjee' : ''}
-            {t.finished ? ` · дууссан (${t.championName ?? '?'})` : t.currentRound ? ` · ${t.currentRound}-р даваа (${t.currentPending} хүлээгдэж буй)` : t.entrants ? ` · ${t.entrants} бөх, эхлээгүй` : ''}
+            {t.date} · {t.format ? formatName(t.format) : `${t.rounds} даваа`} · {t.boutCount} барилдаан · {t.openMarkets} нээлттэй зах зээл{t.devjeeId ? ' · devjee' : ''}
+            {t.finished ? ` · дууссан (${t.championName ?? '?'})` : t.currentRound ? ` · ${roundName(t.currentRound, t.roundLabels)} (${t.currentPending} хүлээгдэж буй)` : t.entrants ? ` · ${t.entrants} бөх, эхлээгүй` : ''}
           </P>
         </Card>
       ))}
@@ -278,7 +278,7 @@ type SyncReply = { result: { newBouts: number; resolved: number; voided: number 
  */
 function SyncStatusInfo({ st }: { st: DevjeeSyncStatusDto }) {
   const head = st.enabled
-    ? { text: '🟢 Автомат sync асаалттай — 30 секунд тутам devjee-ээс шалгана', color: theme.success }
+    ? { text: '🟢 Автомат sync асаалттай — тэмцээний өдөр 30 секунд тутам (өмнө нь 10 минут, дараа нь 2 минут тутам) devjee-ээс шалгана', color: theme.success }
     : st.offReason === 'finished'
       ? { text: '✓ Тэмцээн дууссан — автомат sync шаардлагагүй (devjee дээр шинэ мэдээлэл гарахгүй)', color: theme.muted }
       : st.offReason === 'expired'
@@ -299,6 +299,7 @@ function SyncStatusInfo({ st }: { st: DevjeeSyncStatusDto }) {
         </P>
       ) : null}
       {st.lastError ? <Text style={{ color: theme.danger, fontSize: 12.5 }}>Сүүлийн шалгалтын алдаа: {st.lastError}</Text> : null}
+      {st.format ? <P muted small>Хэлбэр: {formatName(st.format)} — аварга, прогноз тооцохгүй; хүрээний дүрэм (32+ бөх) хамаарахгүй</P> : null}
       {st.warning ? <Text style={{ color: theme.warn, fontSize: 12.5, fontWeight: '700' }}>⚠ {st.warning} — аварга тооцохгүй{st.enabled ? ', devjee-ээс засагдахыг хүлээж байна' : ''}</Text> : null}
     </View>
   );
@@ -549,7 +550,7 @@ function TournamentDetail({ id, refreshKey, onBack, onOpenMarket }: { id: string
           {pending.slice(0, 30).map((b) => (
             <View key={b.id} style={s.boutRow}>
               <P small>
-                {b.round}-р даваа: {b.a.name} ({fmtPct(b.priorA ?? 0.5)}) — {b.b.name}
+                {b.roundLabel ?? `${b.round}-р даваа`}: {b.a.name} ({fmtPct(b.priorA ?? 0.5)}) — {b.b.name}
               </P>
               <Row>
                 <Button small title={`${b.a.name} давав`} variant="secondary" loading={busy} onPress={() => run(async () => {
@@ -620,7 +621,7 @@ function TournamentDetail({ id, refreshKey, onBack, onOpenMarket }: { id: string
         .map(([r, list]) => (
           <Card key={r} style={{ gap: 4 }}>
             <H2>
-              {r}-р даваа · {list.length} барилдаан · {list.filter((b) => b.winnerId).length} дууссан
+              {list[0]?.roundLabel ?? `${r}-р даваа`} · {list.length} барилдаан · {list.filter((b) => b.winnerId).length} дууссан
             </H2>
             {list.slice(0, 16).map((b) => (
               <P key={b.id} small>

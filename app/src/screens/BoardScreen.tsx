@@ -10,7 +10,7 @@ import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-na
 
 import { api, ApiError, newRequestId } from '../api';
 import { Button, Card, Loading, Msg, P, Pill, Row } from '../components/ui';
-import { fmtPct, fmtTokens } from '../format';
+import { fmtPct, fmtTokens, formatName, roundName } from '../format';
 import type { BatchBuyOrder, BatchBuyResultDto, BoardBoutDto, BoardDto, MeDto, QuoteDto } from '../shared/api';
 import { theme } from '../theme';
 
@@ -126,7 +126,7 @@ function PairRow({
     <View style={s.pair}>
       <Row style={{ justifyContent: 'space-between' }}>
         <Text style={s.pairNo}>
-          №{index + 1} · {bout.round}-р даваа
+          №{index + 1} · {bout.roundLabel ?? `${bout.round}-р даваа`}
         </Text>
         <Row gap={6}>
           {bout.status === 'open' ? <Pill text="нээлттэй" color={theme.success} textColor="#052e16" /> : null}
@@ -321,7 +321,11 @@ export function BoardScreen({
   const headline = st.finished
     ? `Тэмцээн дууссан · аварга: ${st.championName ?? '?'}`
     : st.current
-      ? `${st.current}-р даваа явж байна · ${cur?.total ?? 0} барилдаан, ${cur?.pending ?? 0} хүлээгдэж буй · ${st.alive} бөх үлдсэн`
+      ? t.format
+        ? t.pendingBouts
+          ? `${t.boutCount} барилдаан · ${t.pendingBouts} хүлээгдэж буй`
+          : `${t.boutCount} барилдаан — бүгд шийдэгдсэн`
+        : `${roundName(st.current, t.roundLabels)} явж байна · ${cur?.total ?? 0} барилдаан, ${cur?.pending ?? 0} хүлээгдэж буй · ${st.alive} бөх үлдсэн`
       : `Эхлээгүй · ${st.entrants} бөх бүртгэлтэй — админ 1-р давааг эхлүүлэхэд хосууд энд гарна`;
 
   return (
@@ -342,7 +346,7 @@ export function BoardScreen({
             <Card style={{ gap: 6 }}>
               <Text style={s.title}>{t.name}</Text>
               <P muted small>
-                {t.date} · {t.rounds} даваа · {t.entrants} бөх
+                {t.date} · {t.format ? formatName(t.format) : `${t.rounds} даваа`} · {t.entrants} бөх
               </P>
               <P small>{headline}</P>
               <Row gap={6}>
@@ -366,12 +370,12 @@ export function BoardScreen({
                 })}
               </Row>
               <P muted small>
-                {shownRound}-р даваа: {data.bouts.length} барилдаан. Бөх дээр дараад дүнгээ сонго → доор «Тавих». Хувь = бооцооноос үүссэн зах зээлийн магадлал («—» = бооцоо хараахан ороогүй, эхэлж тавьсан нь үнийг тогтооно).
+                {roundName(shownRound, t.roundLabels)}: {data.bouts.length} барилдаан. Бөх дээр дараад дүнгээ сонго → доор «Тавих». Хувь = бооцооноос үүссэн зах зээлийн магадлал («—» = бооцоо хараахан ороогүй, эхэлж тавьсан нь үнийг тогтооно).
               </P>
             </Card>
             {mine.n ? (
               <View style={s.mineBox}>
-                <Text style={s.mineTitle}>🧾 Миний бооцоо — {shownRound}-р даваа</Text>
+                <Text style={s.mineTitle}>🧾 Миний бооцоо — {roundName(shownRound, t.roundLabels)}</Text>
                 <Text style={s.mineText}>
                   {mine.n} барилдаан · тавьсан {fmtTokens(mine.cost)}
                   {mine.resolved ? ` · буцаж ирсэн +${fmtTokens(mine.returned)} (${mine.resolved - mine.lost} давсан, ${mine.lost} унасан) · ашиг ${mine.returned - mine.cost >= 0 ? '+' : ''}${fmtTokens(mine.returned - mine.cost)}` : ''}

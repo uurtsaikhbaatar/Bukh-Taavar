@@ -32,7 +32,8 @@ async function main(): Promise<void> {
   let store: AuthStore;
   if (process.env.DATABASE_URL) {
     await initSchema();
-    log = await PostgresLog.load();
+    // Эрхийг бичих үедээ л авна — жагсаалт харах төдийд ажиллаж буй серверийг бичих эрхгүй болгохгүй
+    log = await PostgresLog.load(undefined, { owner: `cli:${cmd ?? 'help'}`, claim: false });
     store = new PostgresAuthStore();
   } else {
     log = new JsonlLog(path.join(ROOT, 'data', 'web-events.jsonl'));

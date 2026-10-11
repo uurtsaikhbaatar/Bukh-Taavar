@@ -151,6 +151,7 @@ export function apply(state: State, e: BukhEvent): void {
     }
     case 'bout_result': {
       const bout = need(state.bouts.get(e.boutId), `барилдаан ${e.boutId}`);
+      if (bout.cancelled) throw new StateError(`Лог зөрчилтэй: цуцлагдсан барилдаан ${e.boutId}-д үр дүн оров.`);
       bout.result = { winnerId: e.winnerId, recordedAt: e.at };
       // Бодит барилдаан (гоц биш → ratingUpdates-тэй): туршлага +1, сүүлийн барилдааны огноо
       for (const u of e.ratingUpdates) {
@@ -160,6 +161,13 @@ export function apply(state: State, e: BukhEvent): void {
         if (fast !== undefined) entry.fast = fast;
         state.ratings.set(u.wrestlerId, entry);
       }
+      break;
+    }
+    case 'bout_cancelled': {
+      const bout = need(state.bouts.get(e.boutId), `барилдаан ${e.boutId}`);
+      if (bout.result) throw new StateError(`Лог зөрчилтэй: үр дүнтэй барилдаан ${e.boutId} цуцлагдав.`);
+      if (bout.cancelled) throw new StateError(`Лог зөрчилтэй: барилдаан ${e.boutId} давхар цуцлагдав.`);
+      bout.cancelled = { at: e.at, reason: e.reason };
       break;
     }
     case 'market_created': {
@@ -187,6 +195,15 @@ export function apply(state: State, e: BukhEvent): void {
       if (m.closesAt !== undefined) market.closesAt = m.closesAt;
       if (m.rule !== undefined) market.rule = structuredClone(m.rule);
       state.markets.set(m.id, market);
+      break;
+    }
+    case 'market_repriced': {
+      const market = need(state.markets.get(e.marketId), `зах зээл ${e.marketId}`);
+      if (market.status !== 'open') throw new StateError(`Лог зөрчилтэй: ${e.marketId} нээлттэй биш байхад дахин үнэлэгдэв.`);
+      if (market.tradeCount !== 0) throw new StateError(`Лог зөрчилтэй: арилжаатай ${e.marketId} дахин үнэлэгдэв.`);
+      if (e.q0.length !== market.q.length) throw new StateError(`Лог зөрчилтэй: q урт зөрүүтэй (${e.id}).`);
+      market.q = [...e.q0];
+      market.q0 = [...e.q0];
       break;
     }
     case 'market_closed': {
