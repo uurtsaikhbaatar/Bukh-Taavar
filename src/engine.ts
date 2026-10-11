@@ -42,16 +42,16 @@ import type { BukhEvent } from './events.ts';
 import { costToBuy, initialQuantities, maxLossFromInitial, prices, sharesForSpend } from './lmsr.ts';
 import {
   ageFromBirthDate,
-  BIG_TOURNAMENT_KIND,
   BRACKET_SIZES,
   DEFAULT_K,
-  FAST_K,
   isTitle,
+  LOCAL_NAADAM_KIND,
   MIN_BRACKET,
   MIN_BRACKET_ROUNDS,
   predictProbability,
   REST_CAP_DAYS,
   seedRating,
+  updateFast,
   updateRatings,
   winProbability,
   type PredictContext,
@@ -490,15 +490,15 @@ export class Engine {
   }
 
   /**
-   * Барилдааны таамгийн контекст: даваа, улсын наадам эсэх. Давааны гишүүд (1-р даваанд
-   * фаворит найдвартай, 4+ даваанд бага) шигшээ хүрээнд л утгатай — тойргийн/багийн
-   * «даваа» нь насны ангилал, үе тул тэнд даваагүй (суурь налуу).
+   * Барилдааны таамгийн контекст: даваа, аймгийн баяр наадам эсэх. Давааны гишүүн (4+ даваанд
+   * фаворит бага найдвартай) шигшээ хүрээнд л утгатай — тойргийн/багийн «даваа» нь насны
+   * ангилал, үе тул тэнд даваагүй (суурь налуу).
    */
   boutContext(bout: Pick<Bout, 'round' | 'tournamentId'>): PredictContext {
     const t = this.state.tournaments.get(bout.tournamentId);
     const ctx: PredictContext = {};
     if (!t || Engine.roundInfoOf(t, bout.round).format === 'knockout') ctx.round = bout.round;
-    if (t?.kind === BIG_TOURNAMENT_KIND) ctx.big = true;
+    if (t?.kind === LOCAL_NAADAM_KIND) ctx.local = true;
     return ctx;
   }
 
@@ -1038,8 +1038,8 @@ export class Engine {
       const b = this.rating(bout.bId);
       const aWon = winnerId === bout.aId;
       const [na, nb] = updateRatings(a.rating, b.rating, aWon, this.opts.eloK);
-      // Таамгийн (хурдан) рейтинг — байхгүй бол үндсэн рейтингээс эхэлнэ
-      const [fa, fb] = updateRatings(a.fast ?? a.rating, b.fast ?? b.rating, aWon, FAST_K);
+      // Таамгийн рейтинг — байхгүй бол үндсэн рейтингээс эхэлнэ; K нь бөх бүрийн туршлагаас (шинэ бөх хурдан сурна)
+      const [fa, fb] = updateFast(a.fast ?? a.rating, b.fast ?? b.rating, aWon, a.games, b.games);
       ratingUpdates.push(
         { wrestlerId: bout.aId, rating: na, source: 'local', asOf: t.date, fast: fa },
         { wrestlerId: bout.bId, rating: nb, source: 'local', asOf: t.date, fast: fb },

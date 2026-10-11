@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { Engine, EngineError, type BracketRule } from './engine.ts';
-import { predictProbability, winProbability } from './rating.ts';
+import { fastK, predictProbability, winProbability } from './rating.ts';
 import { serializeState } from './state.ts';
 import { JsonlLog, MemoryLog } from './store.ts';
 
@@ -711,7 +711,7 @@ test('аварга: сүүлийн даваанд «финал» олон бол
   assert.match(strict.bracketIssue('h') ?? '', /2 бөх/);
 });
 
-test('таамгийн (хурдан, K=64) рейтинг: үр дүнгээр шинэчлэгдэж, replay-д хадгалагдана; дэлгэцийн рейтинг K=32 хэвээр', () => {
+test('таамгийн рейтинг (туршлагаас хамаарсан K): үр дүнгээр шинэчлэгдэж, replay-д хадгалагдана; дэлгэцийн рейтинг K=32 хэвээр', () => {
   const log = new MemoryLog();
   const engine = new Engine(log, { idGen: (() => { let n = 0; return () => `f${++n}`; })(), bracket: false });
   engine.addWrestler({ id: 'a', name: 'А', title: 'цолгүй', birthDate: '2000-05-01' });
@@ -724,8 +724,9 @@ test('таамгийн (хурдан, K=64) рейтинг: үр дүнгээр 
   const ra = engine.rating('a');
   const rb = engine.rating('b');
   assert.ok(Math.abs(ra.rating - (1800 - 16)) < 1e-9, 'K=32: тэнцүү рейтингээс 16 оноо');
-  assert.ok(Math.abs(ra.fast! - (1850 - 64 * winProbability(1850, 1800))) < 1e-9, 'K=64 хурдан рейтинг');
-  assert.ok(Math.abs(rb.fast! - (1800 + 64 * winProbability(1850, 1800))) < 1e-9, 'хурдан рейтинггүй тал үндсэн рейтингээс эхэлнэ');
+  assert.ok(Math.abs(ra.fast! - (1850 - fastK(10) * winProbability(1850, 1800))) < 1e-9, '10 барилдаантай бөхийн K');
+  assert.ok(Math.abs(rb.fast! - (1800 + fastK(0) * winProbability(1850, 1800))) < 1e-9, 'таамгийн рейтинггүй тал үндсэн рейтингээс эхэлнэ; туршлагагүй бол K хамгийн их');
+  assert.ok(rb.fast! - 1800 > 1850 - ra.fast!, 'шинэ бөх илүү хөдөлнө');
   // rating_set хурдан рейтинг өгөхгүй бол өмнөх утга хадгалагдана
   engine.setRating('a', 1700, 'local', '2026-07-12');
   assert.equal(engine.rating('a').fast, ra.fast);

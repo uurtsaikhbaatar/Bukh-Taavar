@@ -39,8 +39,8 @@ export interface ForecastInput {
   known?: KnownResult[];
   sims?: number;
   seed?: number;
-  /** Улсын наадам эсэх (таамгийн контекст). */
-  big?: boolean;
+  /** Аймгийн баяр наадам эсэх (таамгийн контекст). */
+  local?: boolean;
 }
 
 export interface Forecast {
@@ -88,7 +88,7 @@ export function forecastTournament(input: ForecastInput): Forecast {
     laterRounds.push(s);
     firstRound.push(e.daysSinceLast !== undefined ? { ...s, daysSinceLast: e.daysSinceLast } : s);
   }
-  const ctxByRound: PredictContext[] = Array.from({ length: rounds + 1 }, (_, r) => (input.big ? { round: r, big: true } : { round: r }));
+  const ctxByRound: PredictContext[] = Array.from({ length: rounds + 1 }, (_, r) => (input.local ? { round: r, local: true } : { round: r }));
   const pairP = (a: number, b: number, round: number): number =>
     round === 1
       ? predictProbability(firstRound[a]!, firstRound[b]!, ctxByRound[1])

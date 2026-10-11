@@ -8,12 +8,14 @@ import {
   PREDICT_WEIGHTS,
   predictProbability,
   BASE_RATING,
+  fastK,
   seedRating,
   titleFromCode,
   titleInfo,
   titleLabel,
   titleRank,
   TITLES,
+  updateFast,
   updateRatings,
   winProbability,
 } from './rating.ts';
@@ -97,20 +99,27 @@ test('цолын код ↔ цол, суурь рейтинг эрэмбэтэй
   assert.deepEqual(uls, [13, 14, 15, 16, 17, 18, 19, 20, 21]);
 });
 
-test('таамгийн загвар (2026-10-03): даваа, улсын наадам, нас, хурдан рейтинг', () => {
+test('таамгийн загвар v4: хожуу даваа, аймгийн наадам, туршлагын хэлбэр, нас, таамгийн рейтинг', () => {
   const a = { rating: 2000 };
   const b = { rating: 1800 };
   const p2 = predictProbability(a, b, { round: 2 });
-  assert.ok(predictProbability(a, b, { round: 1 }) > p2, '1-р даваанд фаворит илүү найдвартай');
-  assert.ok(predictProbability(a, b, { round: 5 }) < p2, 'хожуу даваанд бага');
-  assert.ok(predictProbability(a, b, { round: 2, big: true }) > p2, 'улсын наадамд илүү');
+  close(predictProbability(a, b, { round: 1 }), p2); // 1-р давааны тусдаа налуу v4-т байхгүй
+  close(predictProbability(a, b), p2);
+  assert.ok(predictProbability(a, b, { round: 5 }) < p2, 'хожуу даваанд фаворит бага найдвартай');
+  assert.ok(predictProbability(a, b, { round: 2, local: true }) < p2, 'аймгийн баяр наадамд фаворит бага найдвартай');
+  // Туршлага: эхний хэдэн барилдаан хамгийн их жинтэй (0→5 > 50→500), тэгш хэмтэй
+  const vs = (g: number) => predictProbability({ rating: 1500, games: g }, { rating: 1500, games: 100 });
+  assert.ok(vs(1) < vs(5) && vs(5) < vs(50) && vs(50) < 0.5);
+  const logit = (p: number) => Math.log(p / (1 - p));
+  assert.ok(logit(vs(5)) - logit(vs(1)) > logit(vs(500)) - logit(vs(50)));
+  close(predictProbability({ rating: 1500, games: 3 }, { rating: 1600, games: 80 }) + predictProbability({ rating: 1600, games: 80 }, { rating: 1500, games: 3 }), 1);
   // Хурдан рейтинг байвал түүгээр
   close(predictProbability({ rating: 1500, fast: 2000 }, { rating: 1900, fast: 1800 }), predictProbability(a, b));
   // Ижил рейтингтэй бол залуу нь давуу; тэгш хэм (нас, контексттой)
   const young = { rating: 1900, age: 22 };
   const old = { rating: 1900, age: 34 };
   assert.ok(predictProbability(young, old) > 0.5);
-  close(predictProbability(young, old, { round: 1, big: true }) + predictProbability(old, young, { round: 1, big: true }), 1);
+  close(predictProbability(young, old, { round: 5, local: true }) + predictProbability(old, young, { round: 5, local: true }), 1);
   // Нэг талын нас мэдэгдэхгүй бол насны гишүүнгүй
   close(predictProbability({ rating: 1900, age: 22 }, { rating: 1900 }), 0.5);
 });
@@ -123,4 +132,22 @@ test('ageFromBirthDate: мэдэгдэхгүйн тэмдэг, хязгаар', 
   assert.equal(ageFromBirthDate('1940-01-01', at), undefined, '65-аас ахмад');
   const age = ageFromBirthDate('1996-10-03', at)!;
   assert.ok(Math.abs(age - 30) < 0.01);
+});
+
+test('таамгийн рейтингийн K: шинэ бөх хурдан сурна, туршлагатай бөх devjee-ийн K=32 руу дөхнө', () => {
+  close(fastK(0), 128);
+  close(fastK(undefined), 128);
+  close(fastK(20), 80);
+  close(fastK(180), 41.6);
+  assert.ok(fastK(100_000) < 32.1 && fastK(100_000) > 32);
+  for (let g = 0; g < 500; g += 7) assert.ok(fastK(g) > fastK(g + 7), 'туршлага нэмэгдэхэд K буурна');
+  // Шинэ бөх (0 барилдаан) туршлагатайг (200) давбал: шинэ нь их өснө, туршлагатай нь бага буурна
+  const e = winProbability(1300, 1700);
+  const [n, v] = updateFast(1300, 1700, true, 0, 200);
+  close(n, 1300 + fastK(0) * (1 - e));
+  close(v, 1700 - fastK(200) * (1 - e));
+  assert.ok(n - 1300 > 1700 - v, 'тэг нийлбэр биш');
+  // Ижил туршлагатай бол тэг нийлбэр
+  const [x, y] = updateFast(1500, 1500, false, 30, 30);
+  close(x + y, 3000);
 });

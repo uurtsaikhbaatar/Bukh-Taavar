@@ -7,7 +7,7 @@ import type { ForecastDto, MarketRuleDto } from '../app/src/shared/api.ts';
 import type { MarketRule } from '../src/domain.ts';
 import { EngineError, type Engine } from '../src/engine.ts';
 import { championTop, forecastTournament, matchupProbs, probChampion, type Forecast } from '../src/forecast.ts';
-import { BIG_TOURNAMENT_KIND, titleLabel } from '../src/rating.ts';
+import { LOCAL_NAADAM_KIND, titleLabel } from '../src/rating.ts';
 
 const SIMS = 500;
 
@@ -46,7 +46,7 @@ export class ForecastService {
       known,
       sims: SIMS,
       seed: 20260816,
-      big: t.kind === BIG_TOURNAMENT_KIND,
+      local: t.kind === LOCAL_NAADAM_KIND,
     });
     this.cache.set(tournamentId, { key, f, at: Date.now() });
     return f;

@@ -20,7 +20,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
 import type { RoundInfo } from './domain.ts';
-import { FAST_K, seedRating, titleFromCode, updateRatings, winProbability, type Title } from './rating.ts';
+import { seedRating, titleFromCode, updateFast, updateRatings, winProbability, type Title } from './rating.ts';
 
 export interface ArchiveWrestler {
   name: string;
@@ -446,7 +446,7 @@ export function eloReplay(
   options: EloReplayOptions = {},
 ): { ratings: Map<string, number>; fast: Map<string, number>; predictions: { date: string; p1: number; won1: boolean }[]; games: Map<string, number>; lastDate: Map<string, string> } {
   const k = options.k ?? 32;
-  const fastK = options.fastK ?? FAST_K;
+  const fastK = options.fastK;
   const seed = options.seed ?? (() => 1500);
   const ratings = new Map<string, number>();
   const fast = new Map<string, number>();
@@ -467,7 +467,10 @@ export function eloReplay(
     const [n1, n2] = updateRatings(r1, r2, b.winner === 1, k);
     ratings.set(b.w1, n1);
     ratings.set(b.w2, n2);
-    const [f1, f2] = updateRatings(getFast(b.w1), getFast(b.w2), b.winner === 1, fastK);
+    // Таамгийн рейтинг: анхдагч нь туршлагаас хамаарсан K (`fastK`, шинэ бөх хурдан сурна); тоо өгвөл тэгш K
+    const [f1, f2] = fastK !== undefined
+      ? updateRatings(getFast(b.w1), getFast(b.w2), b.winner === 1, fastK)
+      : updateFast(getFast(b.w1), getFast(b.w2), b.winner === 1, games.get(b.w1) ?? 0, games.get(b.w2) ?? 0);
     fast.set(b.w1, f1);
     fast.set(b.w2, f2);
     games.set(b.w1, (games.get(b.w1) ?? 0) + 1);

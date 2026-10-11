@@ -2,7 +2,7 @@
  * Хуучин ба шинэ хувилбарын A/B туршилт: сүүлийн N тэмцээнийг тухайн хувилбарын ЖИНХЭНЭ Engine-ээр
  * «амьд» нөхцөлд дахин тоглуулна (look-ahead-гүй).
  *
- *   node scripts/ab-test.ts <кодын үндэс> <шошго> [N=50]     → data/ab/ab-<шошго>.json
+ *   node scripts/ab-test.ts <кодын үндэс> <шошго> [N=50 | since:2020-01-01]   → data/ab/ab-<шошго>.json
  *   node scripts/ab-compare.mjs                              → хүснэгтүүд (old ба new шошготой хоёр файлаас)
  *
  * Жишээ (production-д байгаа commit-ийг ажлын хувилбартай харьцуулах):
@@ -21,7 +21,10 @@ import { pathToFileURL } from 'node:url';
 
 const ROOT = path.resolve(process.argv[2]!);
 const LABEL = process.argv[3]!;
-const N = Number(process.argv[4] ?? 50);
+const ARG = process.argv[4] ?? '50';
+/** `since:YYYY-MM-DD` — тэр өдрөөс хойших бүх тэмцээн; тоо — сүүлийн N тэмцээн. */
+const SINCE = ARG.startsWith('since:') ? ARG.slice(6) : undefined;
+const N = SINCE ? Infinity : Number(ARG);
 const DATA = path.join('data', 'devjee');
 const OUT = path.join('data', 'ab');
 mkdirSync(OUT, { recursive: true });
@@ -29,9 +32,17 @@ mkdirSync(OUT, { recursive: true });
 const mod = (p: string) => import(pathToFileURL(path.join(ROOT, p)).href);
 const { Engine } = await mod('src/engine.ts');
 const { MemoryLog } = await mod('src/store.ts');
-const { BIG_TOURNAMENT_KIND } = await mod('src/rating.ts');
+const ratingMod = await mod('src/rating.ts');
+const { TOURNAMENT_TYPES } = await mod('src/devjee.ts');
+/** Тухайн хувилбарын таамгийн рейтингийн шинэчлэл (v4+: `updateFast`); хуучин хувилбарт тэгш K=64. */
+const updFast: (fa: number, fb: number, aWon: boolean, ga: number, gb: number) => [number, number] =
+  ratingMod.updateFast ??
+  ((fa: number, fb: number, aWon: boolean) => {
+    const d = 64 * ((aWon ? 1 : 0) - 1 / (1 + Math.pow(10, (fb - fa) / 400)));
+    return [fa + d, fb - d];
+  });
 
-interface B { tid: string; date: string; round: number; w1: string; w2: string; winner: 1 | 2; noShow?: boolean; mid: string; fmt?: 'rr' | 'team'; other?: boolean }
+interface B { tid: string; date: string; round: number; w1: string; w2: string; winner: 1 | 2; kind?: string; noShow?: boolean; mid: string; fmt?: 'rr' | 'team'; other?: boolean }
 interface T { id: string; name: string; date: string; types?: number[]; roundInfo?: Record<string, { format: string; name?: string; otherStyle?: boolean }> }
 interface W { name: string; title: string; birthDate?: string }
 
@@ -44,6 +55,7 @@ const byTid = new Map<string, B[]>();
 for (const b of valid) (byTid.get(b.tid) ?? byTid.set(b.tid, []).get(b.tid)!).push(b);
 const targets = [...byTid.keys()]
   .map((tid) => ({ tid, date: byTid.get(tid)![0]!.date }))
+  .filter((t) => !SINCE || t.date >= SINCE)
   .sort((a, b) => b.date.localeCompare(a.date) || b.tid.localeCompare(a.tid))
   .slice(0, N)
   .sort((a, b) => a.date.localeCompare(b.date) || a.tid.localeCompare(b.tid));
@@ -60,13 +72,22 @@ let ptr = 0;
 const advance = (date: string) => {
   for (; ptr < clean.length && clean[ptr]!.date < date; ptr++) {
     const b = clean[ptr]!;
-    upd(R, b.w1, b.w2, b.winner === 1, 32); upd(F, b.w1, b.w2, b.winner === 1, 64);
+    upd(R, b.w1, b.w2, b.winner === 1, 32);
+    const [n1, n2] = updFast(F.get(b.w1) ?? 1300, F.get(b.w2) ?? 1300, b.winner === 1, G.get(b.w1) ?? 0, G.get(b.w2) ?? 0);
+    F.set(b.w1, n1); F.set(b.w2, n2);
     G.set(b.w1, (G.get(b.w1) ?? 0) + 1); G.set(b.w2, (G.get(b.w2) ?? 0) + 1);
     L.set(b.w1, b.date); L.set(b.w2, b.date);
   }
 };
 
-interface Row { tid: string; date: string; round: number; fmt: string; other: boolean; noShow: boolean; mid: string; p: number | null; newcomer: boolean }
+/** p = давсан бөхийн магадлал; p1 = w1-ийн магадлал; y = w1 давсан; g/r/a = барилдааны өмнөх туршлага, хурдан рейтинг, нас. */
+const ageOf = (wid: string, date: string): number | null => {
+  const bd = wrestlers[wid]?.birthDate;
+  if (!bd || bd.startsWith('1900-01-01')) return null;
+  const a = (Date.parse(date) - Date.parse(bd)) / (365.25 * 86_400_000);
+  return a >= 14 && a <= 65 ? Math.round(a * 10) / 10 : null;
+};
+interface Row { tid: string; date: string; round: number; fmt: string; other: boolean; noShow: boolean; mid: string; p: number | null; newcomer: boolean; p1: number | null; y: 0 | 1; g1: number; g2: number; r1: number; r2: number; a1: number | null; a2: number | null; kind: string }
 const rows: Row[] = [];
 let failed = 0;
 const t0 = performance.now();
@@ -89,7 +110,9 @@ for (const { tid, date } of targets) {
   }
   const maxRound = Math.max(...bouts.map((b) => b.round));
   const tin: Record<string, unknown> = { id: 't', name: (meta?.name || tid).trim().slice(0, 70) || tid, date, rounds: maxRound };
-  if (meta?.types?.includes(1)) tin.kind = BIG_TOURNAMENT_KIND;
+  // Production-ий импорттой адил: төрөл = devjee-ийн эхний төрлийн нэр (улсын наадам, аймгийн баяр наадам …)
+  const kind = meta?.types?.[0] !== undefined ? TOURNAMENT_TYPES[meta.types[0]] : undefined;
+  if (kind) tin.kind = kind;
   if (meta?.roundInfo) tin.roundInfo = meta.roundInfo; // хуучин хувилбар үүнийг мэдэхгүй (үл тооно)
   engine.createTournament(tin);
   for (let r = 1; r <= maxRound; r++) {
@@ -108,14 +131,19 @@ for (const { tid, date } of targets) {
     }
     for (const b of list) {
       const mk = market.get(b.mid);
-      const row: Row = { tid, date, round: r, fmt: b.fmt ?? 'ko', other: !!b.other, noShow: !!b.noShow, mid: b.mid, p: null, newcomer: fresh.has(b.w1) || fresh.has(b.w2) };
-      if (mk && !b.noShow) row.p = engine.probabilities(mk)[b.winner - 1] as number;
+      const s1 = engine.rating(b.w1), s2 = engine.rating(b.w2);
+      const row: Row = { tid, date, round: r, fmt: b.fmt ?? 'ko', other: !!b.other, noShow: !!b.noShow, mid: b.mid, p: null, newcomer: fresh.has(b.w1) || fresh.has(b.w2), p1: null, y: b.winner === 1 ? 1 : 0, g1: s1.games ?? 0, g2: s2.games ?? 0, r1: Math.round(s1.fast ?? s1.rating), r2: Math.round(s2.fast ?? s2.rating), a1: ageOf(b.w1, date), a2: ageOf(b.w2, date), kind: b.kind ?? '' };
+      if (mk && !b.noShow) {
+        const pr = engine.probabilities(mk) as number[];
+        row.p = pr[b.winner - 1]!;
+        row.p1 = pr[0]!;
+      }
       rows.push(row);
       engine.recordBoutResult(`b-${b.mid}`, b.winner === 1 ? b.w1 : b.w2, b.noShow ? { updateRatings: false } : {});
     }
   }
 }
-const meta = targets.map(({ tid, date }) => ({ tid, date, name: tournaments.get(tid)?.name ?? tid, formats: [...new Set(Object.values(tournaments.get(tid)?.roundInfo ?? {}).map((x) => x.format))] }));
+const meta = targets.map(({ tid, date }) => ({ tid, date, name: tournaments.get(tid)?.name ?? tid, formats: [...new Set(Object.values(tournaments.get(tid)?.roundInfo ?? {}).map((x) => x.format))], types: tournaments.get(tid)?.types ?? [], size: new Set(byTid.get(tid)!.flatMap((b) => [b.w1, b.w2])).size, rounds: Math.max(...byTid.get(tid)!.map((b) => b.round)) }));
 writeFileSync(path.join(OUT, `ab-${LABEL}.json`), JSON.stringify({ label: LABEL, n: targets.length, tournaments: meta, rows }), 'utf8');
 const priced = rows.filter((r) => r.p !== null);
 const ll = priced.reduce((s, r) => s - Math.log(Math.max(1e-12, r.p!)), 0) / priced.length;
