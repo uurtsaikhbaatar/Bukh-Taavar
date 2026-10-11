@@ -1233,12 +1233,23 @@ export function createRouter(deps: ApiDeps): Router {
       await persist();
       changed(result.marketIds);
     }
+    // Дууссан / хугацаа өнгөрсөн тэмцээнд автомат sync асаахгүй — асаасан ч дараагийн шалгалтаар
+    // буцаад унтардаг байсан нь (тайлбаргүй) эвдрэл мэт харагддаг байв. Шалтгааныг нь хариулна.
+    let note: string | undefined;
     if (hasEnabled) {
-      d.setEnabled(id, enabled);
-      await persist(); // syncEnabled нь Engine-ийн үйл явдал — дахин асахад сэргэнэ
-      changed();
+      const reason = enabled ? d.offReason(id) : undefined;
+      if (reason) {
+        note =
+          reason === 'finished'
+            ? 'Тэмцээн дууссан — devjee дээр шинэ мэдээлэл гарахгүй тул автомат sync шаардлагагүй. Нэг удаа шалгалаа.'
+            : 'Тэмцээний хугацаа өнгөрсөн — автомат sync шаардлагагүй. Нэг удаа шалгалаа.';
+      } else {
+        d.setEnabled(id, enabled);
+        await persist(); // syncEnabled нь Engine-ийн үйл явдал — дахин асахад сэргэнэ
+        changed();
+      }
     }
-    return { status: d.status(id), result: result ?? null };
+    return { status: d.status(id), result: result ?? null, ...(note ? { note } : {}) };
   });
 
   /** Архивын бүх бөхийг Engine-д оруулна (өргөтгөсөн талбар + devjee масштабын Elo). */

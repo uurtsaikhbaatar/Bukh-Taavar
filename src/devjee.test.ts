@@ -15,6 +15,7 @@ import {
   inflateState,
   MATCH_KINDS,
   parseStateDocument,
+  pushIdTime,
   toWrestler,
   TOURNAMENT_TYPES,
   type DevjeeTournamentState,
@@ -295,4 +296,12 @@ test('клиент: төлөвийг snapshot-оос түрүүлж авна; х
   const calls3: FakeCall[] = [];
   const c3 = new DevjeeClient({ fetch: fakeFetch({ [`${HOSTS.firestore}/states3/old1`]: { fields: { data: { bytesValue: full } } } }, calls3), cacheDir: null, firebaseApiKey: 'K', minIntervalMs: 0 });
   assert.equal((await c3.tournamentState('old1')).state.name, state.name);
+});
+
+test('pushIdTime: Firebase push id-ийн эхний 8 тэмдэгтээс цаг (devjee-ийн сүүлийн өөрчлөлт)', () => {
+  assert.equal(new Date(pushIdTime('-P3dPE1W6EkXu-qJ99us')!).toISOString(), '2026-10-11T05:21:45.633Z');
+  assert.equal(pushIdTime(undefined), undefined);
+  assert.equal(pushIdTime('short'), undefined);
+  assert.equal(pushIdTime('!!!!!!!!abcdefghijkl'), undefined, 'push id-ийн цагаан толгойд байхгүй тэмдэгт');
+  assert.equal(pushIdTime('--------abcdefghijkl'), undefined, '1970 он — push id биш');
 });

@@ -3,7 +3,7 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { api, ApiError } from '../api';
 import { Button, Card, Field, H2, Loading, Msg, P, Pill, Row } from '../components/ui';
-import { fmtPct, fmtTokens, fmtWhen } from '../format';
+import { fmtAgo, fmtPct, fmtTokens, fmtWhen } from '../format';
 import type { AdminUserDto, BoutDto, DevjeeHomeDto, DevjeeSyncStatusDto, ForecastDto, MarketDto, RoundStatusDto, TournamentDetailDto, TournamentDto, WrestlerDto } from '../shared/api';
 import { theme } from '../theme';
 
@@ -269,6 +269,68 @@ function RoundControl({ tournamentId, status, roundVolume, onChanged }: { tourna
   );
 }
 
+type SyncReply = { result: { newBouts: number; resolved: number; voided: number } | null; note?: string };
+
+/**
+ * Sync-ийн төлөвийг энгийн үгээр: автомат асаалттай / дууссан / хугацаа өнгөрсөн / унтраалттай,
+ * мөн «манай сүүлийн шалгалт» ба «devjee дээрх сүүлийн өөрчлөлт» хоёрыг зэрэгцүүлж — sync
+ * зогссон уу, devjee өөрөө чимээгүй байна уу гэдгийг ялгана.
+ */
+function SyncStatusInfo({ st }: { st: DevjeeSyncStatusDto }) {
+  const head = st.enabled
+    ? { text: '🟢 Автомат sync асаалттай — 30 секунд тутам devjee-ээс шалгана', color: theme.success }
+    : st.offReason === 'finished'
+      ? { text: '✓ Тэмцээн дууссан — автомат sync шаардлагагүй (devjee дээр шинэ мэдээлэл гарахгүй)', color: theme.muted }
+      : st.offReason === 'expired'
+        ? { text: '⏹ Тэмцээний хугацаа өнгөрсөн — автомат sync шаардлагагүй', color: theme.muted }
+        : { text: '⏸ Автомат sync унтраалттай — асаавал 30 секунд тутам шалгана', color: theme.warn };
+  const quietMin = st.devjeeChangedAt ? (Date.now() - new Date(st.devjeeChangedAt).getTime()) / 60_000 : 0;
+  return (
+    <View style={{ gap: 2 }}>
+      <Text style={{ color: head.color, fontSize: 12.5, fontWeight: '700' }}>{head.text}</Text>
+      <P muted small>
+        Барилдаан {st.bouts} (шийдсэн {st.resolved})
+        {st.lastSyncAt ? ` · сүүлд шалгасан ${fmtWhen(st.lastSyncAt)} (${fmtAgo(st.lastSyncAt)})` : ' · энэ сервер ассанаас хойш шалгаагүй'}
+      </P>
+      {st.devjeeChangedAt ? (
+        <P muted small>
+          devjee дээрх сүүлийн өөрчлөлт: {fmtWhen(st.devjeeChangedAt)} ({fmtAgo(st.devjeeChangedAt)})
+          {st.enabled && quietMin > 10 ? ' — devjee өөрөө шинэ хослол/үр дүн оруулаагүй байна; манай sync хэвийн' : ''}
+        </P>
+      ) : null}
+      {st.lastError ? <Text style={{ color: theme.danger, fontSize: 12.5 }}>Сүүлийн шалгалтын алдаа: {st.lastError}</Text> : null}
+      {st.warning ? <Text style={{ color: theme.warn, fontSize: 12.5, fontWeight: '700' }}>⚠ {st.warning} — аварга тооцохгүй{st.enabled ? ', devjee-ээс засагдахыг хүлээж байна' : ''}</Text> : null}
+    </View>
+  );
+}
+
+/** Sync-ийн товчнууд: дууссан/хугацаа өнгөрсөн тэмцээнд зөвхөн «Дахин шалгах» (асаах товчгүй). */
+function SyncButtons({ st, busy, run, onChanged }: { st: DevjeeSyncStatusDto; busy: boolean; run: (fn: () => Promise<string>) => Promise<void>; onChanged: () => void }) {
+  const summary = (r: SyncReply) => {
+    const n = (r.result?.newBouts ?? 0) + (r.result?.resolved ?? 0) + (r.result?.voided ?? 0);
+    return `Шалгалаа: шинэ барилдаан ${r.result?.newBouts ?? 0}, шийдсэн ${r.result?.resolved ?? 0}, хүчингүй ${r.result?.voided ?? 0}${n === 0 ? ' — devjee дээр шинэ зүйл алга' : ''}.`;
+  };
+  const checkNow = (
+    <Button small title={st.offReason ? 'Дахин шалгах' : 'Одоо шалгах'} variant={st.offReason ? 'secondary' : 'accent'} loading={busy} onPress={() => run(async () => {
+      const r = await api<SyncReply>(`/api/admin/devjee/sync/${st.tournamentId}`, { body: { now: true } });
+      onChanged();
+      return summary(r);
+    })} />
+  );
+  if (st.offReason && !st.enabled) return <Row>{checkNow}</Row>;
+  return (
+    <Row>
+      {checkNow}
+      <Button small title={st.enabled ? 'Автомат sync зогсоох' : 'Автомат sync асаах'} variant={st.enabled ? 'danger' : 'secondary'} loading={busy} onPress={() => run(async () => {
+        const r = await api<SyncReply>(`/api/admin/devjee/sync/${st.tournamentId}`, { body: { enabled: !st.enabled } });
+        onChanged();
+        if (r.note) return r.note;
+        return st.enabled ? 'Автомат sync зогслоо — devjee-ээс өөрөө татахаа болино.' : 'Автомат sync аслаа — 30 секунд тутам шалгана.';
+      })} />
+    </Row>
+  );
+}
+
 /** devjee автомат шинэчлэлийн (sync) төлөв + удирдлага — тэмцээний дэлгэц дээр. */
 function DevjeeSyncCard({ tournamentId, enabled, tick, onChanged }: { tournamentId: string; enabled: boolean; tick: number; onChanged: () => void }) {
   const [st, setSt] = useState<DevjeeSyncStatusDto | null>(null);
@@ -283,29 +345,13 @@ function DevjeeSyncCard({ tournamentId, enabled, tick, onChanged }: { tournament
     <Card style={{ gap: 8 }}>
       <Row style={{ justifyContent: 'space-between' }}>
         <H2>devjee sync — автомат шинэчлэл</H2>
-        <Pill text={on ? 'асаалттай ●' : 'унтраалттай'} color={on ? theme.success : theme.border} textColor={on ? '#052e16' : theme.text} />
+        <Pill text={on ? 'асаалттай ●' : st?.offReason === 'finished' ? 'дууссан ✓' : 'унтраалттай'} color={on ? theme.success : theme.border} textColor={on ? '#052e16' : theme.text} />
       </Row>
       <P muted small>
-        {on ? '30 секунд тутам' : 'Асаавал 30 секунд тутам'} devjee.mn-ээс энэ тэмцээний төлөвийг татаж: шинэ хослол → барилдааны зах зээл автоматаар нээгдэнэ; давсан бөх бичигдэхэд → зах зээл шийдэгдэж төлбөр тархана, Elo шинэчлэгдэнэ; гоц (ирээгүй) → зах зээл хүчингүй, буцаалт. Гараар юу ч хийх шаардлагагүй.
+        Асаалттай үед 30 секунд тутам devjee.mn-ээс энэ тэмцээний төлөвийг татаж: шинэ хослол → барилдааны таавар автоматаар нээгдэнэ; давсан бөх бичигдэхэд → шийдэгдэж төлбөр тархана, рейтинг шинэчлэгдэнэ; гоц (ирээгүй) → хүчингүй, буцаалт. Импортлоход өөрөө асч, тэмцээн дуусахад өөрөө унтарна — гараар юу ч хийх шаардлагагүй.
       </P>
-      {st ? (
-        <P muted small>
-          Барилдаан {st.bouts} (шийдсэн {st.resolved}) · бөх {st.wrestlers} · {st.lastSyncAt ? `сүүлд ${fmtWhen(st.lastSyncAt)}` : 'sync хийгээгүй'}
-          {st.lastError ? ` · алдаа: ${st.lastError}` : ''}
-        </P>
-      ) : null}
-      <Row>
-        <Button small title="Одоо sync" variant="accent" loading={busy} onPress={() => run(async () => {
-          const r = await api<{ result: { newBouts: number; resolved: number; voided: number } | null }>(`/api/admin/devjee/sync/${tournamentId}`, { body: { now: true } });
-          onChanged();
-          return `Шинэ барилдаан ${r.result?.newBouts ?? 0}, шийдсэн ${r.result?.resolved ?? 0}, хүчингүй ${r.result?.voided ?? 0}.`;
-        })} />
-        <Button small title={on ? 'Sync унтраах' : 'Sync асаах'} variant={on ? 'danger' : 'secondary'} loading={busy} onPress={() => run(async () => {
-          await api(`/api/admin/devjee/sync/${tournamentId}`, { body: { enabled: !on } });
-          onChanged();
-          return on ? 'Sync унтарлаа — devjee-ээс автоматаар татахаа болино.' : 'Sync асаалаа — 30 сек тутам шалгана.';
-        })} />
-      </Row>
+      {st ? <SyncStatusInfo st={st} /> : null}
+      {st ? <SyncButtons st={st} busy={busy} run={run} onChanged={onChanged} /> : null}
       {view}
     </Card>
   );
@@ -718,6 +764,19 @@ function DevjeeTab({ refreshKey }: { refreshKey: number }) {
   const [error, setError] = useState<string | null>(null);
   const { busy, run, view } = useMsg();
   const [tick, setTick] = useState(0);
+  const [showDone, setShowDone] = useState(false);
+  const sync = useMsg();
+  const active = statuses.filter((x) => x.enabled || !x.offReason);
+  const done = statuses.filter((x) => !x.enabled && !!x.offReason);
+  // Төлөв (сүүлд шалгасан цаг г.м) өөрөө шинэчлэгдэнэ — хуудсыг дахин ачаалах шаардлагагүй
+  useEffect(() => {
+    const timer = setInterval(() => {
+      api<{ statuses: DevjeeSyncStatusDto[] }>('/api/admin/devjee/status')
+        .then((d) => setStatuses(d.statuses))
+        .catch(() => undefined);
+    }, 15_000);
+    return () => clearInterval(timer);
+  }, []);
   useEffect(() => {
     api<DevjeeHomeDto>('/api/admin/devjee/home')
       .then((h) => {
@@ -734,14 +793,14 @@ function DevjeeTab({ refreshKey }: { refreshKey: number }) {
     run(async () => {
       const r = await api<{ imported: { wrestlersAdded: number; ratingsFromTop: number; ratingsFromMatches: number } }>('/api/admin/devjee/import', { body: { tid: id } });
       setTick((x) => x + 1);
-      return `Импорт: бөх +${r.imported.wrestlersAdded}, рейтинг топ ${r.imported.ratingsFromTop}, түүхээс ${r.imported.ratingsFromMatches}. Одоо «Тэмцээн» табаас sync асаа.`;
+      return `Импорт: бөх +${r.imported.wrestlersAdded}, рейтинг топ ${r.imported.ratingsFromTop}, түүхээс ${r.imported.ratingsFromMatches}. Автомат sync аслаа — шинэ хослол, үр дүнг 30 секунд тутам өөрөө татна.`;
     });
 
   return (
     <ScrollView contentContainerStyle={s.wrap}>
       <Card style={{ gap: 8 }}>
         <H2>devjee.mn-ээс тэмцээн импортлох</H2>
-        <P muted small>Импорт: тэмцээн + бүртгэгдсэн бөхчүүд + Elo рейтинг. Дараа нь sync асаавал 30 сек тутам шинэ хослол → зах зээл, үр дүн → шийдвэр автоматаар.</P>
+        <P muted small>Импорт: тэмцээн + бүртгэгдсэн бөхчүүд + рейтинг. Импортлоход автомат sync өөрөө асч, 30 секунд тутам шинэ хослол → таавар, үр дүн → шийдвэр; тэмцээн дуусахад өөрөө унтарна.</P>
         <Row>
           <Field label="devjee тэмцээний id (URL-ийн /t/… хэсэг)" value={tid} onChangeText={setTid} style={{ flex: 1 }} />
           <Button title="Импорт" variant="accent" loading={busy} onPress={() => doImport(tid.trim())} disabled={!tid.trim()} />
@@ -769,27 +828,36 @@ function DevjeeTab({ refreshKey }: { refreshKey: number }) {
       {statuses.length ? (
         <Card style={{ gap: 8 }}>
           <H2>Sync төлөв</H2>
-          {statuses.map((st) => (
+          <P muted small>
+            Идэвхтэй тэмцээнд sync өөрөө ажиллана. «Сүүлд шалгасан» = манай сервер devjee-ээс хамгийн сүүлд татсан цаг; «devjee дээрх сүүлийн өөрчлөлт» = devjee-д хамгийн сүүлд хослол/үр дүн орсон цаг. Сүүлийнх нь хуучин байвал devjee өөрөө шинэ мэдээлэл оруулаагүй гэсэн үг.
+          </P>
+          {sync.view}
+          {active.length === 0 ? <P muted small>Одоо идэвхтэй (дуусаагүй) тэмцээн алга.</P> : null}
+          {active.map((st) => (
             <View key={st.tournamentId} style={s.boutRow}>
               <P small>
-                {st.tournamentId} · барилдаан {st.bouts} (шийдсэн {st.resolved}) · {st.lastSyncAt ? `сүүлд ${fmtWhen(st.lastSyncAt)}` : 'хийгээгүй'}
-                {st.lastError ? ` · алдаа: ${st.lastError}` : ''}
+                {st.name} · {st.date}
               </P>
-              {st.warning ? <Text style={{ color: theme.warn, fontSize: 12.5, fontWeight: '700' }}>⚠ {st.warning} — аварга тооцохгүй{st.enabled ? ', devjee-ээс засагдахыг хүлээж байна' : ''}</Text> : null}
-              <Row>
-                <Button small title={st.enabled ? 'Sync унтраах' : 'Sync асаах'} variant={st.enabled ? 'danger' : 'accent'} loading={busy} onPress={() => run(async () => {
-                  await api(`/api/admin/devjee/sync/${st.tournamentId}`, { body: { enabled: !st.enabled } });
-                  setTick((x) => x + 1);
-                  return st.enabled ? 'Sync унтарлаа.' : 'Sync асаалаа — 30 сек тутам шалгана.';
-                })} />
-                <Button small title="Одоо sync" variant="secondary" loading={busy} onPress={() => run(async () => {
-                  const r = await api<{ result: { newBouts: number; resolved: number; voided: number } | null }>(`/api/admin/devjee/sync/${st.tournamentId}`, { body: { now: true } });
-                  setTick((x) => x + 1);
-                  return `Шинэ ${r.result?.newBouts ?? 0}, шийдсэн ${r.result?.resolved ?? 0}, хүчингүй ${r.result?.voided ?? 0}.`;
-                })} />
-              </Row>
+              <SyncStatusInfo st={st} />
+              <SyncButtons st={st} busy={sync.busy} run={sync.run} onChanged={() => setTick((x) => x + 1)} />
             </View>
           ))}
+          {done.length ? (
+            <Text style={{ color: theme.accent, fontWeight: '700' }} onPress={() => setShowDone((x) => !x)}>
+              {showDone ? '▾' : '▸'} Дууссан / хугацаа өнгөрсөн тэмцээнүүд ({done.length}) — sync шаардлагагүй
+            </Text>
+          ) : null}
+          {showDone
+            ? done.map((st) => (
+                <View key={st.tournamentId} style={s.boutRow}>
+                  <P small>
+                    {st.name} · {st.date}
+                  </P>
+                  <SyncStatusInfo st={st} />
+                  <SyncButtons st={st} busy={sync.busy} run={sync.run} onChanged={() => setTick((x) => x + 1)} />
+                </View>
+              ))
+            : null}
         </Card>
       ) : null}
     </ScrollView>

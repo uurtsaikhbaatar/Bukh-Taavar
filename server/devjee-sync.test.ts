@@ -14,6 +14,8 @@ function fakeApi(state: DevjeeTournamentState) {
     wD: { id: 'wD', firstName: 'Тест', lastName: 'Тестийн', title: '4', aimag: '1' },
   };
   const calls = { state: 0, fetch: 0, ratings: 0, current: 0 };
+  /** devjee snapshot-ийн actionId (сүүлийн үйлдлийн push id) — тестэд тавьж өгнө. */
+  const meta: { actionId?: string } = {};
   const api: DevjeeApi = {
     home: async () => ({
       scheduled: [{ id: 'T2', name: 'Ирэх наадам', date: '2026-09-01', location: { aimag: 17, sum: 1 } }],
@@ -22,7 +24,7 @@ function fakeApi(state: DevjeeTournamentState) {
     tournament: async (tid) => ({ id: tid, name: 'Тест наадам — маш урт нэртэй тэмцээн бөгөөд энэ нэр нь далан тэмдэгтээс хэтэрнэ шүү', date: '2026-08-20', type: [1], location: { aimag: 19, sum: 1 } }),
     tournamentState: async () => {
       calls.state += 1;
-      return { state: structuredClone(state), timestamp: '2026-08-20T03:00:00Z' };
+      return { state: structuredClone(state), timestamp: '2026-08-20T03:00:00Z', ...(meta.actionId ? { actionId: meta.actionId } : {}) };
     },
     fetchWrestlers: async (wids) => {
       calls.fetch += 1;
@@ -37,7 +39,7 @@ function fakeApi(state: DevjeeTournamentState) {
       return wid === 'wC' ? { rating: 2259, asOf: '2026-07-10' } : undefined;
     },
   };
-  return { api, calls, state };
+  return { api, calls, state, meta };
 }
 
 /** Тэмцээний өдрийн цаг (Улаанбаатар) — авто-унтраалт/засварын хугацааг тогтвортой болгоно. */
@@ -295,4 +297,61 @@ test('автомат засвар: хүрээ дутуу + sync унтраалт
   assert.equal(late.isEnabled('dj-T9'), false, 'хугацаа өнгөрсөн — дахин асаахгүй (админд ⚠ л үлдэнэ)');
   assert.match(late.status('dj-T9').warning ?? '', /2 бөх/);
   late.stop();
+});
+
+test('sync-ийн төлөв: нэр/огноо, devjee дээрх сүүлийн өөрчлөлтийн цаг, дууссан бол offReason (асаах шаардлагагүй), огноо дагана', async () => {
+  const { ids, matches } = fullBracket32();
+  const st = baseState();
+  st.wrestlers = Object.fromEntries(ids.map((id, i) => [id, { id, order: i + 1 }]));
+  st.rounds = { '1': { id: 1 }, '2': { id: 2 }, '3': { id: 3 }, '4': { id: 4 }, '5': { id: 5 } };
+  st.matches = { ...matches };
+  const final = st.matches.r5m1!;
+  delete st.matches.r5m1;
+  const { api, state, meta } = fakeApi(st);
+  const engine = new Engine(new MemoryLog(), { idGen: (() => { let n = 0; return () => `i${++n}`; })(), defaultB: 1_000 });
+  let now = ON_DAY;
+  const sync = new DevjeeSync({ client: api, engine, log: () => undefined, now: () => now });
+  const { tournamentId } = await sync.importTournament('T1', { withRatings: false });
+  meta.actionId = '-P3dPE1W6EkXu-qJ99us';
+  const r = await sync.syncOnce(tournamentId);
+  assert.equal(r.newBouts, 30);
+  let s1 = sync.status(tournamentId);
+  assert.equal(s1.date, '2026-08-20');
+  assert.ok(s1.name.startsWith('Тест наадам'));
+  assert.equal(s1.finished, false);
+  assert.equal(s1.offReason, undefined, 'финал болоогүй — sync хэрэгтэй');
+  assert.equal(s1.devjeeChangedAt, '2026-10-11T05:21:45.633Z', 'snapshot-ийн actionId-аас тайлсан цаг');
+  assert.equal(s1.lastChangeAt, s1.lastSyncAt, 'энэ sync шинэ барилдаан авчирсан');
+  // Шинэ зүйлгүй sync: шалгасан цаг шинэчлэгдэнэ, «сүүлд өөрчлөгдсөн» хэвээр
+  now += 60_000;
+  await sync.syncOnce(tournamentId);
+  s1 = sync.status(tournamentId);
+  assert.ok(s1.lastSyncAt! > s1.lastChangeAt!);
+  // Тэмцээн хойшлогдвол огноо дагана
+  state.date = '2026-08-27';
+  await sync.syncOnce(tournamentId);
+  assert.equal(engine.tournament(tournamentId).date, '2026-08-27');
+  state.date = '2026-08-20';
+  await sync.syncOnce(tournamentId);
+  // Финал шийдэгдэв → дууссан: sync унтарч, offReason = finished
+  state.matches.r5m1 = final;
+  await sync.syncOnce(tournamentId);
+  s1 = sync.status(tournamentId);
+  assert.equal(s1.finished, true);
+  assert.equal(s1.enabled, false);
+  assert.equal(s1.offReason, 'finished');
+  assert.equal(sync.offReason(tournamentId), 'finished');
+  // Жагсаалт: асаалттай нь эхэндээ
+  engine.addWrestler({ id: 'h1', name: 'Х1', title: 'цолгүй' });
+  engine.addWrestler({ id: 'h2', name: 'Х2', title: 'цолгүй' });
+  engine.createTournament({ id: 'dj-LIVE', name: 'Амьд', date: '2026-08-19', rounds: 7, devjeeId: 'LIVE', entrants: ['h1', 'h2'] });
+  const sync2 = new DevjeeSync({ client: api, engine, log: () => undefined, now: () => now });
+  sync2.setEnabled('dj-LIVE', true);
+  assert.deepEqual(sync2.allStatuses().map((x) => x.tournamentId), ['dj-LIVE', tournamentId]);
+  // Финалгүй, барилдаангүй тэмцээн: 7 хоногийн дараа «хугацаа өнгөрсөн»
+  assert.equal(sync2.offReason('dj-LIVE'), undefined);
+  now = ON_DAY + 9 * 24 * 3_600_000;
+  assert.equal(sync2.offReason('dj-LIVE'), 'expired');
+  sync.stop();
+  sync2.stop();
 });

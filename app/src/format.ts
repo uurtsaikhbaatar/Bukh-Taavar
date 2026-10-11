@@ -27,6 +27,19 @@ export function fmtWhen(iso: string): string {
   }
 }
 
+/** ISO → "5 секундын өмнө" / "35 минутын өмнө" / "3 цагийн өмнө" / "2 хоногийн өмнө". */
+export function fmtAgo(iso: string, now: number = Date.now()): string {
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return '';
+  const sec = Math.max(0, Math.round((now - t) / 1000));
+  if (sec < 90) return `${sec} секундын өмнө`;
+  const min = Math.round(sec / 60);
+  if (min < 90) return `${min} минутын өмнө`;
+  const hr = Math.round(min / 60);
+  if (hr < 48) return `${hr} цагийн өмнө`;
+  return `${Math.round(hr / 24)} хоногийн өмнө`;
+}
+
 export function fmtShares(s: number): string {
   return s >= 100 ? fmtTokens(s) : s.toFixed(1);
 }

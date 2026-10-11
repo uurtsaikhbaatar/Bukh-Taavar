@@ -252,6 +252,26 @@ export function inflateState(base64: string): DevjeeTournamentState {
   return JSON.parse(text) as DevjeeTournamentState;
 }
 
+const PUSH_CHARS = '-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz';
+
+/**
+ * Firebase push id-ийн эхний 8 тэмдэгт = үүссэн цаг (мс). devjee-ийн snapshot-ийн `actionId`
+ * нь хамгийн сүүлд орсон үйлдлийн push id тул «devjee дээрх төлөв хамгийн сүүлд хэзээ
+ * өөрчлөгдсөн»-ийг үүгээр мэднэ (манай sync зогссон уу, devjee өөрөө чимээгүй байна уу гэдгийг
+ * ялгахад). Push id биш бол undefined.
+ */
+export function pushIdTime(id: string | undefined): number | undefined {
+  if (!id || id.length < 8) return undefined;
+  let t = 0;
+  for (let i = 0; i < 8; i++) {
+    const k = PUSH_CHARS.indexOf(id[i]!);
+    if (k < 0) return undefined;
+    t = t * 64 + k;
+  }
+  // 2014–2100 оны гадна бол санамсаргүй мөр
+  return t > 1.4e12 && t < 4.2e12 ? t : undefined;
+}
+
 /** Firestore REST баримт → {state, timestamp, actionId}. */
 export function parseStateDocument(doc: unknown): { state: DevjeeTournamentState; timestamp?: string; actionId?: string } {
   const fields = (doc as { fields?: Record<string, Record<string, unknown>> }).fields;
