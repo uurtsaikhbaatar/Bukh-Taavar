@@ -521,6 +521,16 @@ export function createRouter(deps: ApiDeps): Router {
     ...(deps.writer ? { writer: deps.writer() } : {}),
   }));
 
+  // Манайд орсон devjee тэмцээнүүдийн жагсаалт (нийтийн мэдээлэл — devjee-ийн id, нэр, огноо).
+  // Архивын скрипт үүнийг уншдаг: devjee-ийн жилийн хайлт зарим тэмцээнийг буцаадаггүй, харин
+  // сервер нүүр хуудсанд гарсан бүхнийг автоматаар оруулдаг тул энэ жагсаалт илүү бүрэн.
+  router.get('/api/public/devjee-tournaments', () =>
+    engine
+      .tournaments()
+      .filter((t) => !!t.devjeeId)
+      .map((t) => ({ id: t.devjeeId!, name: t.name, date: t.date })),
+  );
+
   // ── бүртгэл / нэвтрэлт ──
   router.post('/api/register', async (ctx) => {
     guardAuthRate(ctx);

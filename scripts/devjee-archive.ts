@@ -4,9 +4,12 @@
  *   npm run archive            (≈2 300 хүсэлт, 300 мс завсартай ≈ 15–25 мин; тасарвал кэшнээс үргэлжилнэ)
  *   npm run archive -- --from 2000 --to 2026     (жилийн хүрээ)
  *
- * Тэмцээний жагсаалт: жилийн жагсаалт (devjee-ийн хайлт) + нүүр хуудас + `archive/extra-tournaments.json`.
- * Жилийн жагсаалтад ТОЙРГИЙН/БАГИЙН тэмцээн ордоггүй — зөвхөн нүүр хуудсанд (сүүлийн 10) гардаг тул
- * харсан бүрээ `extra-tournaments.json`-д хуримтлуулна (git-д орно). Сүүлийн 3 долоо хоногийн
+ * Тэмцээний жагсаалт: жилийн жагсаалт (devjee-ийн хайлт) + нүүр хуудас + production сервер +
+ * `archive/extra-tournaments.json`. Жилийн хайлт зарим тэмцээнийг (тойргийн/багийн, мөн ердийн
+ * зарим — 2026-10-11-нд production-ий 22 тэмцээний 9 нь) буцаадаггүй; тэд зөвхөн нүүр хуудсанд
+ * (сүүлийн 10) гардаг. Production сервер нүүр хуудсыг 10 минут тутам шалгаж бүгдийг оруулдаг тул
+ * түүний жагсаалтыг (`/api/public/devjee-tournaments`, `BUKH_URL`-ээр солино, `BUKH_URL=-` бол үгүй)
+ * авч, харсан бүрээ `extra-tournaments.json`-д хуримтлуулна (git-д орно). Сүүлийн 3 долоо хоногийн
  * тэмцээний төлөвийг кэшээс биш шинээр татна (явцын дундуур архивласан тэмцээн дутуу үлдэхгүй).
  *
  * Гаралт (data/devjee/):
@@ -41,6 +44,8 @@ const HOUR = 3_600_000;
 const EXTRA = path.join('archive', 'extra-tournaments.json');
 /** Энэ хугацаанаас шинэ тэмцээний төлөвийг кэшээс биш шинээр татна (явцын дундуур архивласан байж болно). */
 const FRESH_DAYS = 21;
+/** Манай production сервер — түүнд орсон devjee тэмцээнүүдийн жагсаалтыг авна. */
+const BUKH_URL = process.env.BUKH_URL ?? 'https://bukh-taavar.onrender.com';
 mkdirSync(OUT, { recursive: true });
 
 const logFile = path.join(OUT, 'archive.log');
@@ -127,6 +132,24 @@ async function main(): Promise<void> {
     // Ирээдүйн (товлогдсон) тэмцээнд барилдаан байхгүй — болсных нь дараа орно
     if (!t?.id || !/^\d{4}-\d{2}-\d{2}$/.test(t.date ?? '') || t.date > today) continue;
     if (!metas.has(t.id)) extra.set(t.id, { id: t.id, name: t.name, date: t.date, ...(t.type ? { type: t.type } : {}), ...(t.rank !== undefined ? { rank: t.rank } : {}), ...(t.location ? { location: t.location } : {}), ...(t.arena !== undefined ? { arena: t.arena } : {}) } as DevjeeTournament);
+  }
+  // 1в) Production серверт орсон тэмцээнүүд (жилийн хайлт ч, одоогийн нүүр хуудас ч мэдэхгүйг нөхнө)
+  if (BUKH_URL !== '-') {
+    try {
+      const res = await fetch(`${BUKH_URL}/api/public/devjee-tournaments`, { signal: AbortSignal.timeout(60_000) });
+      const list = res.ok ? ((await res.json()) as { id: string; name: string; date: string }[]) : [];
+      let fromProd = 0;
+      for (const t of list) {
+        if (!t?.id || metas.has(t.id) || extra.has(t.id) || !/^\d{4}-\d{2}-\d{2}$/.test(t.date ?? '') || t.date > today) continue;
+        // Бүтэн мета (төрөл, байршил, зэрэглэл) devjee-ээс; олдохгүй бол серверийн нэр/огноогоор
+        const full = await retry(() => client.tournament(t.id), `мета ${t.id}`);
+        extra.set(t.id, full ? ({ id: t.id, name: full.name || t.name, date: full.date || t.date, ...(full.type ? { type: full.type } : {}), ...(full.rank !== undefined ? { rank: full.rank } : {}), ...(full.location ? { location: full.location } : {}), ...(full.arena !== undefined ? { arena: full.arena } : {}) } as DevjeeTournament) : ({ id: t.id, name: t.name, date: t.date } as DevjeeTournament));
+        fromProd += 1;
+      }
+      log(`Production сервер: ${list.length} тэмцээн, шинээр ${fromProd}${res.ok ? '' : ` (HTTP ${res.status})`}`);
+    } catch (err) {
+      log(`Production серверийн жагсаалт уншигдсангүй (${err instanceof Error ? err.message : String(err)}) — алгаслаа`);
+    }
   }
   let added = 0;
   for (const [id, t] of [...extra]) {
