@@ -812,6 +812,9 @@ function DevjeeTab({ refreshKey }: { refreshKey: number }) {
       {home ? (
         <Card style={{ gap: 6 }}>
           <H2>Товлогдсон / сүүлийн тэмцээнүүд</H2>
+          {/* Импортын хариу/алдаа энд ч харагдана — доош гүйлгэсэн үед дээд картанд гарсныг анзаардаггүй байв */}
+          {view}
+          <Msg text={error} />
           {[...home.scheduled, ...home.recent].map((t) => (
             <Row key={t.id} style={{ justifyContent: 'space-between' }}>
               <View style={{ flexShrink: 1 }}>

@@ -100,6 +100,69 @@ export interface DevjeeStateMatch {
   endedAt?: number;
 }
 
+/**
+ * 2026-10 devjee-ийн шинэ формат (`tournament-state` worker-ийн `/live/{tid}/state` → `snapshot`):
+ * товчилсон түлхүүртэй. `w` = бөх (o = зэрэг дэв, r = бүртгүүлсэн, u = бүртгэлээс гарсан цаг),
+ * `r` = давааны массив (tags: default/round-robin/team, name, m = барилдаан). Барилдаан: w1, w2
+ * (гоцод байхгүй), w = давагч 1/2 (байхгүй = болоогүй), k = хосолгооны төрлийн код (1-ээс),
+ * s = эхэлсэн цаг, e = үргэлжилсэн хугацаа, n = 1 гоц (ирээгүй), b = багц, l = түгжээтэй.
+ */
+export interface DevjeeLiveSnapshot {
+  name?: string;
+  date?: string;
+  isArchived?: boolean;
+  isPublic?: boolean;
+  isSynced?: boolean;
+  wrestlersLocked?: boolean;
+  tags?: string[];
+  w?: Record<string, { o: number; r?: number; u?: number }>;
+  r?: { name?: string; tags?: string[]; isLocked?: boolean; m?: Record<string, { w1: string; w2?: string; w?: 1 | 2; k?: number; s?: number; e?: number; n?: 1; b?: number }> }[];
+}
+
+/** Шинэ форматын хосолгооны кодууд (devjee: picked, assigned, last, drawn, team, round-robin, bye, placeholder) → манай товчлол. */
+const LIVE_KINDS = ['a', 'o', 't', 's', 'b', 'g', 'y', 'd'] as const;
+
+/**
+ * Шинэ форматын snapshot-ийг хуучин `DevjeeTournamentState` болгоно — sync, архив хуучин
+ * бүтцээрээ ажиллана. Бүртгэлээс гарсан (`u`) бөхийг оруулахгүй; давааны дугаар = массивын
+ * индекс + 1. Match id нь тэмцээн дотор давхардвал (шинэ богино id) `id@даваа` болгоно.
+ */
+export function fromLiveSnapshot(s: DevjeeLiveSnapshot): DevjeeTournamentState {
+  const wrestlers: DevjeeTournamentState['wrestlers'] = {};
+  for (const [wid, w] of Object.entries(s.w ?? {})) {
+    if (!w || w.u !== undefined) continue;
+    const rec: DevjeeTournamentState['wrestlers'][string] = { id: wid, order: w.o };
+    if (typeof w.r === 'number') rec.registeredAt = w.r;
+    wrestlers[wid] = rec;
+  }
+  const rounds: DevjeeTournamentState['rounds'] = {};
+  const matches: DevjeeTournamentState['matches'] = {};
+  (s.r ?? []).forEach((r, i) => {
+    const round = i + 1;
+    const tags = r.tags ?? [];
+    const type = tags.includes('round-robin') ? 'round-robin' : tags.includes('team') ? 'team' : 'default';
+    const info: DevjeeTournamentState['rounds'][string] = { id: round, type };
+    if (r.name) info._name = r.name;
+    if (r.isLocked) info.isLocked = true;
+    rounds[String(round)] = info;
+    for (const [mid, m] of Object.entries(r.m ?? {})) {
+      if (!m) continue;
+      const out: DevjeeStateMatch = { round, w1: m.w1, w2: m.w2 ?? '', winner: m.w === 1 || m.w === 2 ? m.w : 0 };
+      const kind = m.k !== undefined ? LIVE_KINDS[m.k - 1] : undefined;
+      if (kind) out.kind = kind;
+      if (m.n === 1) out._noShow = true;
+      if (typeof m.s === 'number') out.startedAt = m.s;
+      matches[mid in matches ? `${mid}@${round}` : mid] = out;
+    }
+  });
+  const state: DevjeeTournamentState = { name: s.name ?? '', date: s.date ?? '', wrestlers, rounds, matches };
+  if (s.isArchived !== undefined) state.isArchived = s.isArchived;
+  if (s.isPublic !== undefined) state.isPublic = s.isPublic;
+  if (s.isSynced !== undefined) state.isSynced = s.isSynced;
+  if (s.wrestlersLocked !== undefined) state.wrestlersLocked = s.wrestlersLocked;
+  return state;
+}
+
 export interface DevjeeTournamentState {
   name: string;
   date: string;
@@ -351,8 +414,10 @@ export const HOSTS = {
   ratings: 'https://ratings.devjee.workers.dev',
   site: 'https://www.devjee.mn',
   firestore: 'https://firestore.googleapis.com/v1/projects/bukh-dd4e0/databases/(default)/documents',
-  /** 2026-09 сайтын шинэчлэлийн API — тэмцээний төлөвийн snapshot энд. */
+  /** 2026-09 сайтын шинэчлэлийн API — тэмцээний төлөвийн snapshot энд (2026-10 хүртэл). */
   api: 'https://api.devjee.mn',
+  /** 2026-10 сайтын шинэчлэлээс хойш тэмцээний амьд төлөв: `/{tid}/state`, `/{tid}/patches?after=`. */
+  state: 'https://tournament-state.devjee.workers.dev/live',
 } as const;
 
 const HOUR = 3_600_000;
@@ -613,11 +678,27 @@ export class DevjeeClient {
    * Тэмцээний бүтэн төлөв: бүртгэгдсэн бөхчүүд (order = зэрэг дэв), даваанууд,
    * барилдаанууд (w1, w2, winner, kind). Амьд тэмцээнд богино TTL өг.
    *
-   * Эх сурвалж 2: 2026-09 сайтын шинэчлэлээс хойш төлөв `api.devjee.mn`-ийн snapshot
-   * дээр (ижил zlib+base64 `data`), хуучин `states3` баримтууд хоосорсон/устсан байж
-   * болзошгүй → эхлээд snapshot, бүтэлгүйтвэл (эсвэл хоосон бол) states3.
+   * Эх сурвалжууд (дарааллаар): 2026-10-оос `tournament-state.devjee.workers.dev/live/{tid}/state`
+   * (шинэ товчилсон формат → `fromLiveSnapshot`; `sequence` = төлөвийн хувилбар); 2026-09-ийн
+   * `api.devjee.mn` snapshot (zlib+base64 `data`); хамгийн хуучин нь Firestore `states3`.
+   * 2026-10-13…18 хооронд devjee хуучин хоёрыг хаасан (404) тул импорт, sync зогссон байв.
    */
-  async tournamentState(tid: string, ttlMs = 10 * 60_000): Promise<{ state: DevjeeTournamentState; timestamp?: string; actionId?: string }> {
+  async tournamentState(tid: string, ttlMs = 10 * 60_000): Promise<{ state: DevjeeTournamentState; timestamp?: string; actionId?: string; sequence?: number }> {
+    try {
+      // Амьд sync (богино TTL) бол worker-ийн кэшийг тойрч шинэ төлөв авна (сайт ч `fresh` хэрэглэдэг)
+      const url = `${HOSTS.state}/${encodeURIComponent(tid)}/state${ttlMs <= 60_000 ? '?fresh' : ''}`;
+      const doc = await this.request<{ snapshot?: DevjeeLiveSnapshot; sequence?: number; ok?: boolean }>(url, { ttlMs });
+      if (doc && typeof doc.snapshot === 'object' && doc.snapshot && !('ok' in doc)) {
+        const state = fromLiveSnapshot(doc.snapshot);
+        if (Object.keys(state.wrestlers).length || Object.keys(state.matches).length) {
+          const out: { state: DevjeeTournamentState; sequence?: number } = { state };
+          if (typeof doc.sequence === 'number') out.sequence = doc.sequence;
+          return out;
+        }
+      }
+    } catch {
+      // шинэ worker алга/алдаа → хуучин эх сурвалжууд
+    }
     try {
       const doc = await this.request<{ actionId?: string; data?: string }>(`${HOSTS.api}/tournament-state/snapshot?id=${encodeURIComponent(tid)}`, { ttlMs });
       if (typeof doc?.data === 'string') {

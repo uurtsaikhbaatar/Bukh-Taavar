@@ -271,8 +271,19 @@ test('клиент: төлөвийг snapshot-оос түрүүлж авна; х
   const r1 = await c1.tournamentState('tid9');
   assert.equal(r1.state.matches.m!.winner, 1);
   assert.equal(r1.actionId, 'a1');
-  assert.equal(calls1.length, 1);
-  assert.ok(calls1[0]!.url.startsWith(`${HOSTS.api}/tournament-state/snapshot?id=tid9`));
+  // шинэ worker (байхгүй → 404) эхэлж, дараа нь 2026-09-ийн snapshot; states3 руу огт хандахгүй
+  assert.equal(calls1.length, 2);
+  assert.ok(calls1[0]!.url.startsWith(`${HOSTS.state}/tid9/state`));
+  assert.ok(calls1[1]!.url.startsWith(`${HOSTS.api}/tournament-state/snapshot?id=tid9`));
+
+  // 0) 2026-10-ийн шинэ worker бүрэн → хуучин эх сурвалжууд руу хандахгүй
+  const calls0: FakeCall[] = [];
+  const c0 = new DevjeeClient({ fetch: fakeFetch({ [`${HOSTS.state}/tid9/state`]: { snapshot: { name: 'Шинэ', date: '2026-10-18', w: { a: { o: 1, r: 1 } }, r: [{ tags: ['default'], m: { m: { w1: 'a', w2: 'b', w: 2, k: 2 } } }] }, sequence: 7 } }, calls0), cacheDir: null, minIntervalMs: 0 });
+  const r0 = await c0.tournamentState('tid9', 20_000);
+  assert.equal(r0.state.matches.m!.winner, 2);
+  assert.equal(r0.sequence, 7);
+  assert.equal(calls0.length, 1);
+  assert.ok(calls0[0]!.url.endsWith('/tid9/state?fresh'), 'амьд sync — кэшгүй шинэ төлөв');
 
   // 2) snapshot хоосон төлөвтэй (цэвэрлэгдсэн) → states3-оос авна
   const calls2: FakeCall[] = [];
@@ -304,4 +315,27 @@ test('pushIdTime: Firebase push id-ийн эхний 8 тэмдэгтээс ца
   assert.equal(pushIdTime('short'), undefined);
   assert.equal(pushIdTime('!!!!!!!!abcdefghijkl'), undefined, 'push id-ийн цагаан толгойд байхгүй тэмдэгт');
   assert.equal(pushIdTime('--------abcdefghijkl'), undefined, '1970 он — push id биш');
+});
+
+test('fromLiveSnapshot (2026-10-ийн шинэ формат): бөх, даваа, барилдаан, гоц, эхэлсэн, бүртгэлээс гарсан', async () => {
+  const { fromLiveSnapshot } = await import('./devjee.ts');
+  const s = fromLiveSnapshot({
+    name: 'Тест', date: '2026-10-18', isArchived: false,
+    w: { a: { o: 1, r: 100 }, b: { o: 2, r: 101 }, c: { o: 3, r: 102, u: 200 }, d: { o: 4, r: 103 } },
+    r: [
+      { name: '', tags: ['default'], m: { m1: { w1: 'a', w2: 'b', w: 2, k: 2 }, m2: { w1: 'd', k: 7 }, m3: { w1: 'a', w2: 'd', s: 1792000000000, k: 1 } } },
+      { name: '15 нас', tags: ['round-robin'], isLocked: true, m: { m1: { w1: 'b', w2: 'd', w: 1, n: 1 } } },
+    ],
+  });
+  assert.deepEqual(Object.keys(s.wrestlers).sort(), ['a', 'b', 'd'], 'бүртгэлээс гарсан бөх орохгүй');
+  assert.equal(s.wrestlers.b!.order, 2);
+  assert.deepEqual(s.rounds['1'], { id: 1, type: 'default' });
+  assert.deepEqual(s.rounds['2'], { id: 2, type: 'round-robin', _name: '15 нас', isLocked: true });
+  assert.deepEqual(s.matches.m1, { round: 1, w1: 'a', w2: 'b', winner: 2, kind: 'o' });
+  assert.deepEqual(s.matches.m2, { round: 1, w1: 'd', w2: '', winner: 0, kind: 'y' }, 'гоц: w2 хоосон');
+  assert.equal(s.matches.m3!.startedAt, 1792000000000);
+  assert.equal(s.matches.m3!.kind, 'a');
+  assert.deepEqual(s.matches['m1@2'], { round: 2, w1: 'b', w2: 'd', winner: 1, _noShow: true }, 'давхардсан id → id@даваа');
+  assert.equal(s.name, 'Тест');
+  assert.equal(s.date, '2026-10-18');
 });

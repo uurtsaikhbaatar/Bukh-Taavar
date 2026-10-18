@@ -75,6 +75,8 @@ interface SyncState {
   lastChangeAt?: string;
   /** Сийрэг горимд дараагийн автомат sync хийх хамгийн эрт цаг (мс). */
   skipUntil?: number;
+  /** Сүүлд харсан төлөвийн тэмдэг (шинэ форматад actionId байхгүй — өөрчлөлтийг үүгээр илрүүлнэ). */
+  stateSig?: string;
 }
 
 /** Автомат sync шаардлагагүй болсон шалтгаан: тэмцээн дууссан / хугацаа өнгөрсөн. */
@@ -455,7 +457,7 @@ export class DevjeeSync {
     this.states.set(tournamentId, st);
     const result: SyncResult = { tournamentId, newBouts: 0, resolved: 0, voided: 0, closed: 0, cancelled: 0, marketIds: [], skipped: 0 };
     try {
-      const { state, actionId } = await this.client.tournamentState(t.devjeeId, 20_000);
+      const { state, actionId, sequence } = await this.client.tournamentState(t.devjeeId, 20_000);
       // Мета эхэлж шинэчлэгдэнэ — давааны хэлбэр (тойргийн/багийн) барилдаан үүсэхээс өмнө
       // мэдэгдэж, дутуу үед нь импортолсон тэмцээний даваа нэмэгдэж дараагийн давааны
       // барилдаанууд орж ирнэ (өмнө нь round > rounds гэж алгасдаг байсан).
@@ -481,6 +483,15 @@ export class DevjeeSync {
       delete st.lastError;
       const changedAt = pushIdTime(actionId);
       if (changedAt !== undefined) st.devjeeChangedAt = new Date(changedAt).toISOString();
+      else {
+        // 2026-10-ийн шинэ форматад сүүлийн үйлдлийн id байхгүй → төлөв өөрчлөгдсөнийг ажиглаж цаг тэмдэглэнэ
+        const all = Object.values(state.matches);
+        const sig = `${sequence ?? ''}|${all.length}|${all.filter((m) => m.winner === 1 || m.winner === 2).length}|${all.filter((m) => m.startedAt).length}`;
+        if (st.stateSig !== sig) {
+          st.stateSig = sig;
+          st.devjeeChangedAt = st.lastSyncAt;
+        }
+      }
       if (result.newBouts || result.resolved || result.voided || result.closed || result.cancelled) st.lastChangeAt = st.lastSyncAt;
       // Авто-унтраалт (offReason): жинхэнэ төгсгөл эсвэл хугацаа өнгөрсөн үед л.
       const reason = st.enabled ? this.offReason(tournamentId) : undefined;
