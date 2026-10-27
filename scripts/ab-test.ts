@@ -2,7 +2,7 @@
  * Хуучин ба шинэ хувилбарын A/B туршилт: сүүлийн N тэмцээнийг тухайн хувилбарын ЖИНХЭНЭ Engine-ээр
  * «амьд» нөхцөлд дахин тоглуулна (look-ahead-гүй).
  *
- *   node scripts/ab-test.ts <кодын үндэс> <шошго> [N=50 | since:2020-01-01]   → data/ab/ab-<шошго>.json
+ *   node scripts/ab-test.ts <кодын үндэс> <шошго> [N=50 | since:2020-01-01 | tids:a,b,c]   → data/ab/ab-<шошго>.json
  *   node scripts/ab-compare.mjs                              → хүснэгтүүд (old ба new шошготой хоёр файлаас)
  *
  * Жишээ (production-д байгаа commit-ийг ажлын хувилбартай харьцуулах):
@@ -24,7 +24,9 @@ const LABEL = process.argv[3]!;
 const ARG = process.argv[4] ?? '50';
 /** `since:YYYY-MM-DD` — тэр өдрөөс хойших бүх тэмцээн; тоо — сүүлийн N тэмцээн. */
 const SINCE = ARG.startsWith('since:') ? ARG.slice(6) : undefined;
-const N = SINCE ? Infinity : Number(ARG);
+/** `tids:a,b,c` — зөвхөн эдгээр тэмцээн. */
+const TIDS = ARG.startsWith('tids:') ? new Set(ARG.slice(5).split(',').filter(Boolean)) : undefined;
+const N = SINCE || TIDS ? Infinity : Number(ARG);
 const DATA = path.join('data', 'devjee');
 const OUT = path.join('data', 'ab');
 mkdirSync(OUT, { recursive: true });
@@ -55,7 +57,7 @@ const byTid = new Map<string, B[]>();
 for (const b of valid) (byTid.get(b.tid) ?? byTid.set(b.tid, []).get(b.tid)!).push(b);
 const targets = [...byTid.keys()]
   .map((tid) => ({ tid, date: byTid.get(tid)![0]!.date }))
-  .filter((t) => !SINCE || t.date >= SINCE)
+  .filter((t) => (!SINCE || t.date >= SINCE) && (!TIDS || TIDS.has(t.tid)))
   .sort((a, b) => b.date.localeCompare(a.date) || b.tid.localeCompare(a.tid))
   .slice(0, N)
   .sort((a, b) => a.date.localeCompare(b.date) || a.tid.localeCompare(b.tid));
