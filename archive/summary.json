@@ -1,13 +1,13 @@
 {
- "generatedAt": "2026-10-11T16:01:32.411Z",
+ "generatedAt": "2026-11-09T04:36:29.126Z",
  "range": [
   1900,
   2026
  ],
- "tournaments": 1476,
- "tournamentsWithState": 1476,
- "bouts": 249529,
- "wrestlers": 22724,
+ "tournaments": 1488,
+ "tournamentsWithState": 1488,
+ "bouts": 252876,
+ "wrestlers": 22967,
  "byYear": {
   "1925": {
    "tournaments": 1,
@@ -414,11 +414,11 @@
    "bouts": 17349
   },
   "2026": {
-   "tournaments": 99,
-   "bouts": 17687
+   "tournaments": 111,
+   "bouts": 21034
   }
  },
- "network": 11,
- "cached": 1597,
+ "network": 7,
+ "cached": 1612,
  "minutes": 0
 }
