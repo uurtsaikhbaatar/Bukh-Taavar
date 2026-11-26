@@ -530,7 +530,7 @@ test('автомат импорт: нүүр хуудасны ойрын тэмц
   assert.deepEqual(await sync.autoImport(), [], 'зогссоны дараа ажиллахгүй');
 });
 
-test('sync-ийн давтамж: тэмцээний өдрөөс өмнө 10 минут тутам, өдөр нь алгасалгүй; өдөр өнгөрч devjee 48 цаг чимээгүй бол унтарна', async () => {
+test('sync-ийн давтамж: тэмцээний өдрөөс өмнө 10 минут тутам, өдөр нь алгасалгүй; өдөр өнгөрч devjee 48 цаг чимээгүй бол унтрахгүй — бооцоо хаагдаж цаг тутам шалгана, хожуу үр дүн орно', async () => {
   const st = baseState();
   st.matches.m1 = { round: 1, w1: 'wA', w2: 'wD', winner: 0 } as DevjeeStateMatch;
   const { api, calls, meta } = fakeApi(st);
@@ -552,14 +552,127 @@ test('sync-ийн давтамж: тэмцээний өдрөөс өмнө 10 м
   await sync.tick();
   await sync.tick();
   assert.equal(calls.state - base, 5);
-  // Өдөр өнгөрсөн, шийдэгдээгүй барилдаан үлдсэн, devjee 2 хоногийн өмнөөс чимээгүй → унтарна
+  // Өдөр өнгөрсөн, шийдэгдээгүй барилдаан үлдсэн, devjee 2 хоногийн өмнөөс чимээгүй → унтрахгүй,
+  // бооцоо хаагдана (үр дүн нь devjee дээр аль хэдийн байж болзошгүй), цаг тутам шалгана
   meta.actionId = '-P3dPE1W6EkXu-qJ99us'; // 2026-10-11T05:21:45Z
   now = Date.parse('2026-10-14T06:00:00Z');
   engine.updateTournament(tournamentId, { date: '2026-10-11' });
   st.date = '2026-10-11';
   sync.setEnabled(tournamentId, true);
   await sync.tick();
-  assert.equal(sync.offReason(tournamentId), 'expired');
+  assert.equal(sync.offReason(tournamentId), undefined);
+  assert.equal(sync.isEnabled(tournamentId), true, '48 цаг чимээгүй ч унтрахгүй');
+  assert.equal(engine.markets({ boutId: 'dj-m1' })[0]!.status, 'closed');
+  const n = calls.state;
+  now += 30 * 60_000;
+  await sync.tick();
+  assert.equal(calls.state, n, 'чимээгүй үед цаг тутам л татна');
+  now += 31 * 60_000;
+  await sync.tick();
+  assert.equal(calls.state, n + 1);
+  // Зохион байгуулагч үр дүнг хожуу оруулав → хаалттай зах зээл шийдэгдэнэ
+  st.matches.m1!.winner = 2;
+  now += 61 * 60_000;
+  await sync.tick();
+  assert.equal(engine.markets({ boutId: 'dj-m1' })[0]!.status, 'resolved');
+  assert.equal(engine.bout('dj-m1').result?.winnerId, 'wD');
+  sync.stop();
+});
+
+test('7 хоногийн дараа шийдэгдээгүй үлдсэн барилдаан цуцлагдаж бооцоо буцна, sync унтарна', async () => {
+  const st = baseState();
+  st.matches.m1 = { round: 1, w1: 'wA', w2: 'wD', winner: 0 } as DevjeeStateMatch;
+  st.matches.m2 = { round: 1, w1: 'wB', w2: 'wC', winner: 1 } as DevjeeStateMatch;
+  const { api } = fakeApi(st);
+  const engine = new Engine(new MemoryLog(), { idGen: (() => { let n = 0; return () => `i${++n}`; })(), defaultB: 1_000, bracket: false });
+  engine.createUser({ id: 'u1', name: 'Бат' });
+  let now = ON_DAY;
+  const sync = new DevjeeSync({ client: api, engine, log: () => undefined, now: () => now });
+  const { tournamentId } = await sync.importTournament('T1', { withRatings: false });
+  await sync.syncOnce(tournamentId);
+  const m1 = engine.markets({ boutId: 'dj-m1' })[0]!;
+  const before = engine.state.users.get('u1')!.balance;
+  engine.buy('u1', m1.id, 0, 100);
+  // 8 хоногийн дараа: m1 devjee дээр хэзээ ч шийдэгдээгүй (давхардсан хоосон бичлэг г.м)
+  now = ON_DAY + 8 * 24 * 3_600_000;
+  await sync.tick();
+  assert.equal(engine.markets({ boutId: 'dj-m1' })[0]!.status, 'voided');
+  assert.equal(engine.bout('dj-m1').cancelled?.reason, 'devjee дээр 7 хоногт үр дүн ороогүй');
+  assert.equal(engine.state.users.get('u1')!.balance, before, 'бооцоо бүтнээрээ буцна');
+  assert.equal(engine.markets({ boutId: 'dj-m2' })[0]!.status, 'resolved', 'үр дүнтэй барилдааныг хөндөхгүй');
   assert.equal(sync.isEnabled(tournamentId), false);
+  assert.equal(engine.markets({ tournamentId, status: 'open' }).length, 0);
+  sync.stop();
+});
+
+test('sync унтраалттай хуучин тэмцээн: 48 цагийн дараа шийдэгдээгүй барилдааны бооцоо хаагдаж, 7 хоногт цуцлагдана', async () => {
+  const st = baseState();
+  st.matches.m1 = { round: 1, w1: 'wA', w2: 'wD', winner: 0 } as DevjeeStateMatch;
+  const { api } = fakeApi(st);
+  const engine = new Engine(new MemoryLog(), { idGen: (() => { let n = 0; return () => `i${++n}`; })(), defaultB: 1_000, bracket: false });
+  let now = ON_DAY;
+  const changed: string[] = [];
+  const sync = new DevjeeSync({ client: api, engine, log: () => undefined, now: () => now, onSynced: (r) => void changed.push(...r.marketIds) });
+  const { tournamentId } = await sync.importTournament('T1', { withRatings: false });
+  await sync.syncOnce(tournamentId);
+  sync.setEnabled(tournamentId, false);
+  // Өдрийн маргааш — хараахан хөндөхгүй
+  now = ON_DAY + 24 * 3_600_000;
+  assert.deepEqual(await sync.sweepStale(), []);
+  assert.equal(engine.markets({ boutId: 'dj-m1' })[0]!.status, 'open');
+  // 3 хоногийн дараа — бооцоо хаагдана
+  now = ON_DAY + 3 * 24 * 3_600_000;
+  assert.equal((await sync.sweepStale()).length, 1);
+  assert.equal(engine.markets({ boutId: 'dj-m1' })[0]!.status, 'closed');
+  assert.equal(changed.length, 1, 'өөрчлөлтийг хадгалж мэдэгдэнэ');
+  assert.deepEqual(await sync.sweepStale(), [], 'идемпотент');
+  // 8 хоногийн дараа — цуцлагдана
+  now = ON_DAY + 8 * 24 * 3_600_000;
+  await sync.sweepStale();
+  assert.equal(engine.markets({ boutId: 'dj-m1' })[0]!.status, 'voided');
+  assert.equal(engine.bout('dj-m1').cancelled?.reason, 'devjee дээр 7 хоногт үр дүн ороогүй');
+  sync.stop();
+});
+
+test('импорт: devjee-ийн рейтинг 403 өгсөн ч тэмцээн орж sync асна (рейтинггүйгээр)', async () => {
+  const st = baseState();
+  st.matches.m1 = { round: 1, w1: 'wA', w2: 'wD', winner: 0 } as DevjeeStateMatch;
+  const { api } = fakeApi(st);
+  const client: DevjeeApi = {
+    ...api,
+    latestRatings: async () => {
+      throw new Error('devjee GET https://ratings.devjee.workers.dev/dates → HTTP 403');
+    },
+  };
+  const engine = new Engine(new MemoryLog(), { idGen: (() => { let n = 0; return () => `i${++n}`; })(), bracket: false });
+  const logs: string[] = [];
+  const sync = new DevjeeSync({ client, engine, log: (m) => logs.push(m), now: () => ON_DAY });
+  const r = await sync.importTournament('T1');
+  assert.equal(r.ratingsFromTop, 0);
+  assert.equal(engine.wrestlers().length, 4);
+  assert.ok(sync.isEnabled(r.tournamentId), 'рейтинг унасан ч sync асна');
+  assert.ok(logs.some((l) => l.includes('рейтинг татагдсангүй')));
+  await sync.tick();
+  assert.equal(engine.bouts(r.tournamentId).length, 1, 'барилдаан орж ирнэ');
+  sync.stop();
+});
+
+test('автомат импорт: дундуур тасарсан (sync асаагүй, барилдаангүй) тэмцээнийг дахин импортолж sync асаана', async () => {
+  const { api } = fakeApi(baseState());
+  const list = { scheduled: [], home: [{ id: 'TODAY', name: 'Өнөөдрийн барилдаан', date: '2026-08-20' }] };
+  const client: DevjeeApi = {
+    ...api,
+    home: async () => structuredClone(list) as Awaited<ReturnType<DevjeeApi['home']>>,
+    tournament: async (tid) => ({ id: tid, name: 'Өнөөдрийн барилдаан', date: '2026-08-20', type: [3] }) as Awaited<ReturnType<DevjeeApi['tournament']>>,
+  };
+  const engine = new Engine(new MemoryLog(), { idGen: (() => { let n = 0; return () => `i${++n}`; })(), bracket: false });
+  // Өмнөх импорт рейтингийн алхам дээр тасарсан мэт: тэмцээн бий, sync унтраалттай, барилдаан алга
+  engine.createTournament({ id: 'dj-TODAY', name: 'Өнөөдрийн барилдаан', date: '2026-08-20', rounds: 2, devjeeId: 'TODAY' });
+  const sync = new DevjeeSync({ client, engine, log: () => undefined, now: () => ON_DAY });
+  assert.equal(sync.isEnabled('dj-TODAY'), false);
+  assert.deepEqual(await sync.autoImport(), ['dj-TODAY']);
+  assert.ok(sync.isEnabled('dj-TODAY'));
+  assert.equal(engine.tournaments().length, 1, 'тэмцээн давхардахгүй');
+  assert.deepEqual(await sync.autoImport(), [], 'асаалттай болсны дараа дахин оролдохгүй');
   sync.stop();
 });

@@ -92,8 +92,17 @@ const REPAIR_WINDOW_MS = 72 * HOUR;
 const EXPIRE_RESOLVED_MS = 72 * HOUR;
 /** Юу ч болсон энэ хугацааны дараа sync унтарна. */
 const EXPIRE_HARD_MS = 7 * DAY;
-/** Тэмцээний өдрөөс хойш devjee дээр энэ хугацаанд өөрчлөлт ороогүй бол sync унтарна (шийдэгдээгүй барилдаан үлдсэн ч). */
-const EXPIRE_SILENT_MS = 48 * HOUR;
+/**
+ * Тэмцээний өдрөөс хойш devjee энэ хугацаанд чимээгүй бол: sync цаг тутам болж, шийдэгдээгүй
+ * барилдааны бооцоо хаагдана (үр дүн нь devjee дээр аль хэдийн байж болзошгүй — хожуу орвол
+ * хаалттай зах зээл шийдэгдсээр). Өмнө нь энэ үед sync унтардаг байсан тул хожуу орсон үр дүн
+ * апп-д ирэхгүй, бооцоо нээлттэй үлддэг байв (2026-11-07-ны шөвгийн барилдаан).
+ */
+const SILENT_MS = 48 * HOUR;
+/** Чимээгүй үеийн sync-ийн давтамж. */
+const SLOW_SILENT_MS = HOUR;
+/** 7 хоногийн дараа шийдэгдээгүй үлдсэн барилдааныг цуцлах шалтгаан. */
+const STALE_REASON = 'devjee дээр 7 хоногт үр дүн ороогүй';
 /** Сийрэг sync: тэмцээний өдрөөс өмнө (бүртгэл, хослол аажим өөрчлөгдөнө). */
 const SLOW_BEFORE_MS = 10 * 60_000;
 /** Сийрэг sync: тэмцээний өдөр өнгөрч, devjee чимээгүй болсон үед. Амьд үед үргэлж `intervalMs`. */
@@ -237,22 +246,33 @@ export class DevjeeSync {
     this.importing = true;
     const done: string[] = [];
     try {
+      // Унтраалттай тэмцээнд өдөр өнгөрч шийдэгдээгүй үлдсэн барилдаан (бооцоо хаах / 7 хоногт цуцлах)
+      try {
+        await this.sweepStale();
+      } catch (err) {
+        this.log(`хуучирсан барилдааны шалгалт алдаа: ${err instanceof Error ? err.message : String(err)}`);
+      }
       const h = await this.client.home();
       const from = ubDate(this.now(), -AUTO_IMPORT_BACK_DAYS);
       const to = ubDate(this.now(), AUTO_IMPORT_AHEAD_DAYS);
-      const known = new Set(this.engine.tournaments().map((t) => t.devjeeId).filter((x): x is string => !!x));
+      const known = new Map<string, string>();
+      for (const t of this.engine.tournaments()) if (t.devjeeId) known.set(t.devjeeId, t.id);
       const seen = new Set<string>();
       for (const t of [...h.scheduled, ...h.home]) {
         if (this.stopped) break;
-        if (!t?.id || seen.has(t.id) || known.has(t.id)) continue;
+        if (!t?.id || seen.has(t.id)) continue;
         seen.add(t.id);
+        // Аль хэдийн байгаа тэмцээнийг алгасна — импорт дундуур тасарч (sync асаагүй, барилдаангүй)
+        // үлдсэнээс бусад нь. Тасарсныг дахин импортлоход тэмцээн/бөх давхардахгүй, sync асна.
+        const localId = known.get(t.id);
+        if (localId && !this.incompleteImport(localId)) continue;
         if (!/^\d{4}-\d{2}-\d{2}$/.test(t.date ?? '') || t.date < from || t.date > to) continue;
         if ((this.importRetryAt.get(t.id) ?? 0) > this.now()) continue;
         try {
           const r = await this.importTournament(t.id);
           this.importRetryAt.delete(t.id);
           done.push(r.tournamentId);
-          this.log(`автомат импорт: ${t.date} «${shortName(t.name, 50)}»`);
+          this.log(`автомат импорт${localId ? ' (тасарсныг дахин)' : ''}: ${t.date} «${shortName(t.name, 50)}»`);
           if (this.onImported) await this.onImported(r);
         } catch (err) {
           this.importRetryAt.set(t.id, this.now() + AUTO_IMPORT_RETRY_MS);
@@ -265,6 +285,11 @@ export class DevjeeSync {
       this.importing = false;
     }
     return done;
+  }
+
+  /** Импорт дундуур тасарсан мэт: sync унтраалттай, нэг ч барилдаангүй, дуусаагүй. */
+  private incompleteImport(tournamentId: string): boolean {
+    return !this.isEnabled(tournamentId) && this.engine.bouts(tournamentId, { includeCancelled: true }).length === 0 && !this.engine.roundStatus(tournamentId).finished;
   }
 
   async importTournament(tid: string, options: { withRatings?: boolean } = {}): Promise<ImportResult> {
@@ -342,45 +367,60 @@ export class DevjeeSync {
     const grown = this.growRounds(tournament.id, state);
     this.refreshEntrants(tournament.id, state, grown);
 
-    // Рейтинг
-    let fromTop = 0;
-    let fromMatches = 0;
-    if (withRatings) {
-      const { date, ratings } = await this.client.latestRatings();
-      let lookups = 0;
-      for (const wid of wids) {
-        const local = this.engine.state.wrestlers.get(wid) ?? this.engine.wrestlerByDevjeeId(wid);
-        if (!local) continue;
-        const top: DevjeeRating | undefined = ratings[wid];
-        const current = this.engine.rating(local.id);
-        if (top) {
-          if (current.source !== 'devjee' || current.asOf !== date || Math.abs(current.rating - top.rating) > 1e-9) {
-            this.engine.setRating(local.id, top.rating, 'devjee', date);
-          }
-          fromTop += 1;
-          continue;
-        }
-        if (current.source === 'devjee') continue; // өмнө нь олсон
-        if (titleInfo(local.title).code < TITLE_LOOKUP_MIN_CODE) continue;
-        if (lookups >= this.maxRatingLookups) continue;
-        lookups += 1;
-        const r = await this.client.currentRating(wid, ratings);
-        if (r) {
-          this.engine.setRating(local.id, r.rating, 'devjee', r.asOf);
-          fromMatches += 1;
-        }
-      }
-    }
-
     if (!this.states.has(tournament.id)) this.states.set(tournament.id, { devjeeId: tid, enabled: false });
     // Импортын дараа sync АВТОМАТААР асна (дууссан тэмцээнийг дахин импортлоход үгүй) —
     // тэмцээний өдөр «Sync асаах» дарахаа мартсанаас даваанууд орж ирэхгүй байх явдлыг таслав.
     // Хуучин тэмцээн ч нэг удаа sync хийгдэж барилдаанууд нь орж ирээд өөрөө унтарна.
+    // Рейтингээс ӨМНӨ асаана: рейтинг татагдахгүй байсан ч (2026-11-д devjee-ийн рейтингийн
+    // хаяг 403 болж) тэмцээн бөхчүүдтэйгээ орсон боловч sync асалгүй, барилдаан ирэхгүй үлддэг байв.
     if (!this.isEnabled(tournament.id) && !this.engine.roundStatus(tournament.id).finished) {
       this.setEnabled(tournament.id, true);
     }
+
+    // Рейтинг — нэмэлт мэдээлэл: алдаа гарвал анхааруулаад үргэлжилнэ (таамаг архивын рейтингээр ажиллана)
+    let fromTop = 0;
+    let fromMatches = 0;
+    if (withRatings) {
+      try {
+        ({ fromTop, fromMatches } = await this.importRatings(wids));
+      } catch (err) {
+        this.warnOnce(`ratings:${tid}`, `импорт ${tid}: devjee-ийн рейтинг татагдсангүй (${err instanceof Error ? err.message : String(err)}) — рейтинггүйгээр үргэлжиллээ`);
+      }
+    }
+
     this.log(`импорт ${tid}: бөх +${added} (${existing} байсан), рейтинг топ ${fromTop}, түүхээс ${fromMatches}`);
     return { tournamentId: tournament.id, devjeeId: tid, created, wrestlersAdded: added, wrestlersExisting: existing, ratingsFromTop: fromTop, ratingsFromMatches: fromMatches };
+  }
+
+  /** devjee-ийн топ жагсаалт (эсвэл бөхийн сүүлийн барилдаан)-аас рейтинг тавина. */
+  private async importRatings(wids: string[]): Promise<{ fromTop: number; fromMatches: number }> {
+    let fromTop = 0;
+    let fromMatches = 0;
+    const { date, ratings } = await this.client.latestRatings();
+    let lookups = 0;
+    for (const wid of wids) {
+      const local = this.engine.state.wrestlers.get(wid) ?? this.engine.wrestlerByDevjeeId(wid);
+      if (!local) continue;
+      const top: DevjeeRating | undefined = ratings[wid];
+      const current = this.engine.rating(local.id);
+      if (top) {
+        if (current.source !== 'devjee' || current.asOf !== date || Math.abs(current.rating - top.rating) > 1e-9) {
+          this.engine.setRating(local.id, top.rating, 'devjee', date);
+        }
+        fromTop += 1;
+        continue;
+      }
+      if (current.source === 'devjee') continue; // өмнө нь олсон
+      if (titleInfo(local.title).code < TITLE_LOOKUP_MIN_CODE) continue;
+      if (lookups >= this.maxRatingLookups) continue;
+      lookups += 1;
+      const r = await this.client.currentRating(wid, ratings);
+      if (r) {
+        this.engine.setRating(local.id, r.rating, 'devjee', r.asOf);
+        fromMatches += 1;
+      }
+    }
+    return { fromTop, fromMatches };
   }
 
   // ── sync ──
@@ -493,6 +533,12 @@ export class DevjeeSync {
         }
       }
       if (result.newBouts || result.resolved || result.voided || result.closed || result.cancelled) st.lastChangeAt = st.lastSyncAt;
+      // Өдөр өнгөрч шийдэгдээгүй үлдсэн барилдаан: чимээгүй бол бооцоо хаагдана, 7 хоногт цуцлагдана
+      const stale = this.settleStale(tournamentId);
+      result.closed += stale.closed;
+      result.voided += stale.voided;
+      result.cancelled += stale.cancelled;
+      result.marketIds.push(...stale.marketIds);
       // Авто-унтраалт (offReason): жинхэнэ төгсгөл эсвэл хугацаа өнгөрсөн үед л.
       const reason = st.enabled ? this.offReason(tournamentId) : undefined;
       if (reason) {
@@ -532,8 +578,8 @@ export class DevjeeSync {
     }
   }
 
-  private cancel(b: Bout, result: SyncResult): void {
-    const r = this.engine.cancelBout(b.id, CANCEL_REASON);
+  private cancel(b: Bout, result: SyncResult, reason = CANCEL_REASON): void {
+    const r = this.engine.cancelBout(b.id, reason);
     for (const mk of r.voidedMarkets) result.marketIds.push(mk.id);
     result.voided += r.voidedMarkets.length;
     result.cancelled += 1;
@@ -636,9 +682,8 @@ export class DevjeeSync {
    *  - 'finished': аварга тодорсон (хүрээний дүрэм хангагдсан, финал шийдэгдсэн) БА бүх
    *    барилдаан шийдэгдсэн — devjee дээр шинэ мэдээлэл гарахгүй;
    *  - 'expired': финалгүй формат (халз, тойргийн, багийн) бүгд шийдэгдээд 72 цаг өнгөрсөн;
-   *    эсвэл тэмцээний өдрөөс 48 цаг өнгөрч devjee ч 48 цаг чимээгүй (шийдэгдээгүй барилдаан
-   *    үлдсэн ч — зохион байгуулагч оруулаагүй үр дүнг хүлээгээд 7 хоног асаалттай байхгүй);
-   *    эсвэл юу ч болсон тэмцээний өдрөөс 7 хоног өнгөрсөн.
+   *    эсвэл тэмцээний өдрөөс 7 хоног өнгөрсөн (үлдсэн барилдааныг `settleStale` цуцална).
+   *    devjee чимээгүй болсон (48 цаг) ч унтрахгүй — цаг тутам шалгаж, хожуу орсон үр дүнг авна.
    * Дутуу төлөвийг (зөвхөн 1-р даваа орж ирсэн г.м) «дууссан» гэж андуурахгүй. Сүлжээгүй —
    * Engine-ийн төлөвөөс (sync-ийн дараа devjee-ийн хүчинтэй барилдаануудтай ижил).
    */
@@ -649,9 +694,62 @@ export class DevjeeSync {
     if (allResolved && this.engine.roundStatus(tournamentId).finished) return 'finished';
     const age = this.now() - dayEnd(t.date);
     if ((allResolved && age > EXPIRE_RESOLVED_MS) || age > EXPIRE_HARD_MS) return 'expired';
-    const changedAt = this.states.get(tournamentId)?.devjeeChangedAt;
-    if (changedAt && age > EXPIRE_SILENT_MS && this.now() - Date.parse(changedAt) > EXPIRE_SILENT_MS) return 'expired';
     return undefined;
+  }
+
+  /**
+   * Тэмцээний өдөр өнгөрсний дараа шийдэгдээгүй үлдсэн барилдаан (devjee үр дүн оруулаагүй,
+   * эсвэл ижил хосын давхардсан хоосон бичлэг):
+   *  - өдрөөс 48 цаг өнгөрч devjee ч 48 цаг чимээгүй (эсвэл sync унтраалттай) → бооцоог хаана:
+   *    үр дүн нь devjee дээр аль хэдийн мэдэгдэж байж болох барилдаанд бооцоо авахгүй;
+   *  - өдрөөс 7 хоног өнгөрсөн → цуцалж, зах зээлийг хүчингүй болгон бооцоог буцаана.
+   * Идемпотент. Sync асаалттай бол `syncOnce` бүрд, унтраалттайг `sweepStale` шалгана.
+   */
+  settleStale(tournamentId: string): SyncResult {
+    const result: SyncResult = { tournamentId, newBouts: 0, resolved: 0, voided: 0, closed: 0, cancelled: 0, marketIds: [], skipped: 0 };
+    const t = this.engine.tournament(tournamentId);
+    const now = this.now();
+    const age = now - dayEnd(t.date);
+    if (age <= SILENT_MS) return result;
+    const pending = this.engine.bouts(tournamentId).filter((b) => !b.result);
+    if (!pending.length) return result;
+    if (age > EXPIRE_HARD_MS) {
+      for (const b of pending) this.cancel(b, result, STALE_REASON);
+      this.log(`${tournamentId}: 7 хоногт үр дүн ороогүй ${pending.length} барилдаан цуцлагдав`);
+      return result;
+    }
+    const st = this.states.get(tournamentId);
+    const changedAt = st?.devjeeChangedAt ? Date.parse(st.devjeeChangedAt) : undefined;
+    // Асаалттай боловч (сервер дахин ассаны дараа) хараахан sync хийгдээгүй бол хүлээнэ
+    const silent = !st?.enabled || (changedAt !== undefined && now - changedAt > SILENT_MS);
+    if (!silent) return result;
+    for (const b of pending) {
+      for (const mk of this.engine.markets({ boutId: b.id })) {
+        if (mk.status !== 'open') continue;
+        this.engine.closeMarket(mk.id);
+        result.marketIds.push(mk.id);
+        result.closed += 1;
+      }
+    }
+    if (result.closed) this.log(`${tournamentId}: devjee чимээгүй — шийдэгдээгүй ${result.closed} барилдааны бооцоо хаагдав`);
+    return result;
+  }
+
+  /**
+   * Sync унтраалттай devjee тэмцээнүүдэд `settleStale`-ийг хэрэглэнэ (асаалттайг `syncOnce`
+   * өөрөө шалгана). Өөрчлөлт гарвал `onSynced`-ээр хадгалж мэдэгдэнэ.
+   */
+  async sweepStale(): Promise<SyncResult[]> {
+    const changed: SyncResult[] = [];
+    for (const t of this.engine.tournaments()) {
+      if (!t.devjeeId || this.isEnabled(t.id) || this.stopped) continue;
+      const r = this.settleStale(t.id);
+      if (r.marketIds.length || r.cancelled) {
+        changed.push(r);
+        if (this.onSynced) await this.onSynced(r);
+      }
+    }
+    return changed;
   }
 
   /**
@@ -666,7 +764,10 @@ export class DevjeeSync {
     if (now < dayStart(t.date)) return SLOW_BEFORE_MS;
     if (now <= dayEnd(t.date)) return 0;
     const changedAt = st.devjeeChangedAt ? Date.parse(st.devjeeChangedAt) : undefined;
-    return changedAt !== undefined && now - changedAt > QUIET_MS ? SLOW_AFTER_MS : 0;
+    if (changedAt === undefined) return 0;
+    // Өдрөөс 48 цаг өнгөрч devjee ч 48 цаг чимээгүй → цаг тутам (хожуу орох үр дүнг хүлээнэ)
+    if (now - dayEnd(t.date) > SILENT_MS && now - changedAt > SILENT_MS) return SLOW_SILENT_MS;
+    return now - changedAt > QUIET_MS ? SLOW_AFTER_MS : 0;
   }
 
   private refreshTimer(): void {

@@ -69,13 +69,16 @@ function TournamentCard({ t, onOpenBoard }: { t: TournamentDto; onOpenBoard: (id
         ? `Эхлээгүй · ${t.entrants} бөх бүртгэлтэй`
         : 'Барилдаан алга';
   const canOpen = t.boutCount > 0;
+  // «Бооцоо тавих» — зөвхөн бооцоо авч буй (нээлттэй) зах зээл байвал. Хүлээгдэж буй барилдаан
+  // байгаа ч зах зээл нь хаагдсан бол (эхэлсэн, эсвэл devjee үр дүн оруулаагүй хуучин тэмцээн) үгүй.
+  const betting = !t.finished && t.openMarkets > 0;
   return (
     <Card style={{ gap: 8 }}>
       <Row style={{ justifyContent: 'space-between' }}>
         <Text style={s.mTitle} numberOfLines={2}>
           {t.name}
         </Text>
-        {pending > 0 && (!t.format || t.openMarkets > 0) ? <Pill text="бооцоо нээлттэй" color={theme.success} textColor="#052e16" /> : t.finished ? <Pill text="дууссан" /> : null}
+        {betting ? <Pill text="бооцоо нээлттэй" color={theme.success} textColor="#052e16" /> : t.finished ? <Pill text="дууссан" /> : null}
       </Row>
       <P muted small>
         {t.date} · {t.format ? formatName(t.format) : `${t.rounds} даваа`}{t.kind ? ` · ${t.kind}` : ''}
@@ -83,8 +86,8 @@ function TournamentCard({ t, onOpenBoard }: { t: TournamentDto; onOpenBoard: (id
       <P small>{line}</P>
       {canOpen ? (
         <Button
-          title={t.finished || pending === 0 ? '🥋 Барилдаанууд, үр дүн →' : '🥋 Барилдаанууд → бооцоо тавих'}
-          variant={pending > 0 ? 'accent' : 'secondary'}
+          title={betting ? '🥋 Барилдаанууд → бооцоо тавих' : '🥋 Барилдаанууд, үр дүн →'}
+          variant={betting ? 'accent' : 'secondary'}
           onPress={() => onOpenBoard(t.id)}
         />
       ) : null}
